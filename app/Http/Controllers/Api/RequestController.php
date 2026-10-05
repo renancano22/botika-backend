@@ -103,6 +103,13 @@ class RequestController extends Controller
         ]);
         $this->sms->notify($medicineRequest->resident, $message, $medicineRequest->request_id);
 
+        // If the medicine was restocked while the request was waiting, mark it fulfilled right away.
+        if ($medicineRequest->request_type === 'restock') {
+            foreach ($medicineRequest->items as $item) {
+                $this->inventory->fulfillRestockRequests($item->medicine_id);
+            }
+        }
+
         return $medicineRequest->fresh(['items.medicine', 'resident', 'reviewer:user_id,name']);
     }
 

@@ -93,6 +93,26 @@ class BotikaFlowTest extends TestCase
         $this->getJson('/api/forecasts', $this->token($staff))->assertForbidden();
     }
 
+    public function test_medicine_with_history_cannot_be_deleted_and_admin_cannot_change_own_role(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Cetirizine 10mg', 'category' => 'Antihistamine', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $unused = Medicine::create(['medicine_name' => 'Typo entry', 'category' => 'Other', 'unit' => 'tablet', 'reorder_level' => 5]);
+
+        $reg = $this->postJson('/api/register', [
+            'name' => 'Ana Cruz', 'email' => 'ana@example.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'address' => 'Zone 4, Bulan', 'contact_no' => '09191234567',
+        ])->assertCreated();
+        $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 5]]],
+            ['Authorization' => 'Bearer ' . $reg->json('token')])->assertCreated();
+
+        $this->deleteJson("/api/medicines/{$medicine->medicine_id}", [], $this->token($admin))->assertStatus(422);
+        $this->deleteJson("/api/medicines/{$unused->medicine_id}", [], $this->token($admin))->assertNoContent();
+
+        $this->putJson("/api/users/{$admin->user_id}", ['name' => $admin->name, 'email' => $admin->email, 'role' => 'staff'], $this->token($admin))
+            ->assertStatus(422);
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];

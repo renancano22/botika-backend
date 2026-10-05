@@ -50,6 +50,14 @@ class UserController extends Controller
         if ($user->role === User::ROLE_RESIDENT && $data['role'] !== User::ROLE_RESIDENT) {
             return response()->json(['message' => 'Resident accounts cannot be changed to staff or admin.'], 422);
         }
+        // Staff/admin accounts cannot become residents (they have no resident profile).
+        if ($user->role !== User::ROLE_RESIDENT && $data['role'] === User::ROLE_RESIDENT) {
+            return response()->json(['message' => 'Staff and administrator accounts cannot be changed to resident.'], 422);
+        }
+        // Prevents the administrator from locking themselves out of the admin pages.
+        if ((int) $user->user_id === (int) $request->user()->user_id && $data['role'] !== $user->role) {
+            return response()->json(['message' => 'You cannot change the role of your own account.'], 422);
+        }
 
         $user->fill(['name' => $data['name'], 'email' => $data['email'], 'role' => $data['role']]);
         if (! empty($data['password'])) {

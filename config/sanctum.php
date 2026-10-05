@@ -50,7 +50,7 @@ return [
     |
     */
 
-    'expiration' => null,
+    'expiration' => env('SANCTUM_EXPIRATION', 720), // minutes: log users out after 12 hours
 
     /*
     |--------------------------------------------------------------------------

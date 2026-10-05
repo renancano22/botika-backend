@@ -61,6 +61,12 @@ class MedicineController extends Controller
         if ($medicine->inventory()->where('quantity', '>', 0)->exists()) {
             return response()->json(['message' => 'This medicine still has stock. Stock-out its batches first.'], 422);
         }
+        // Deleting would also erase its request and dispensing history, which reports and forecasting need.
+        $hasHistory = \App\Models\RequestItem::where('medicine_id', $medicine->medicine_id)->exists()
+            || \App\Models\DispensingItem::where('medicine_id', $medicine->medicine_id)->exists();
+        if ($hasHistory) {
+            return response()->json(['message' => 'This medicine already has request or dispensing records, so it cannot be deleted. Keep it to preserve the history.'], 422);
+        }
         $medicine->delete();
         return response()->noContent();
     }

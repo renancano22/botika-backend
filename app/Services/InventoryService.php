@@ -114,7 +114,7 @@ class InventoryService
     }
 
     /** Approved restock requests become "fulfilled" once all their medicines are back in stock. */
-    protected function fulfillRestockRequests(int $medicineId): void
+    public function fulfillRestockRequests(int $medicineId): void
     {
         /** @var Collection<int, MedicineRequest> $waiting */
         $waiting = MedicineRequest::with(['items.medicine', 'resident'])
