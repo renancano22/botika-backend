@@ -15,7 +15,8 @@ class UserController extends Controller
         return User::with('resident')
             ->when($request->role, fn ($q, $role) => $q->where('role', $role))
             ->when($request->search, fn ($q, $s) => $q->where(fn ($w) => $w
-                ->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%")))
+                ->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%")
+                ->orWhereHas('resident', fn ($r) => $r->where('contact_no', 'like', "%{$s}%")->orWhere('qr_code', 'like', "%{$s}%"))))
             ->orderBy('name')
             ->get();
     }
@@ -41,7 +42,8 @@ class UserController extends Controller
     {
         $data = $request->validate([
             'name' => 'required|string|max:255',
-            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
+            // Residents may have no email (they log in with their mobile number); staff and admin need one.
+            'email' => [$user->role === User::ROLE_RESIDENT ? 'nullable' : 'required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
             'password' => 'nullable|string|min:8',
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF, User::ROLE_RESIDENT])],
         ]);
@@ -59,7 +61,7 @@ class UserController extends Controller
             return response()->json(['message' => 'You cannot change the role of your own account.'], 422);
         }
 
-        $user->fill(['name' => $data['name'], 'email' => $data['email'], 'role' => $data['role']]);
+        $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null, 'role' => $data['role']]);
         if (! empty($data['password'])) {
             $user->password_hash = $data['password'];
         }

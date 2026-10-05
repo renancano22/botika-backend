@@ -113,6 +113,27 @@ class BotikaFlowTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_resident_can_register_without_email_and_log_in_with_mobile_number(): void
+    {
+        $this->postJson('/api/register', [
+            'name' => 'Lola Nena', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'address' => 'Zone 5, Bulan', 'contact_no' => '+63 917 555 0001',
+        ])->assertCreated()->assertJsonPath('user.resident.contact_no', '09175550001');
+
+        // Same number written differently is still recognised as already registered.
+        $this->postJson('/api/register', [
+            'name' => 'Someone Else', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'address' => 'Zone 6, Bulan', 'contact_no' => '0917-555-0001',
+        ])->assertStatus(422);
+
+        $this->postJson('/api/login', ['login' => '09175550001', 'password' => 'secret123'])->assertOk();
+        $this->postJson('/api/login', ['login' => '639175550001', 'password' => 'secret123'])->assertOk();
+        $this->postJson('/api/login', ['login' => '09175550001', 'password' => 'wrongpass'])->assertStatus(422);
+
+        User::factory()->create(['email' => 'staff@example.com']);
+        $this->postJson('/api/login', ['login' => 'staff@example.com', 'password' => 'password'])->assertOk();
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];
