@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Inventory;
+use App\Models\StockTransaction;
 use App\Services\InventoryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -40,7 +41,7 @@ class InventoryController extends Controller
         ]);
 
         $batch = DB::transaction(fn () => $this->inventory->stockIn(
-            (int) $data['medicine_id'], (int) $data['quantity'], $data['expiration_date']
+            (int) $data['medicine_id'], (int) $data['quantity'], $data['expiration_date'], $request->user()->user_id
         ));
 
         return response()->json($batch->load('medicine'), 201);
@@ -48,9 +49,34 @@ class InventoryController extends Controller
 
     public function stockOut(Request $request, Inventory $inventory)
     {
-        $data = $request->validate(['quantity' => 'required|integer|min:1']);
+        $data = $request->validate([
+            'quantity' => 'required|integer|min:1',
+            'reason' => 'required|string|max:255',
+        ]);
 
-        return $this->inventory->stockOut($inventory, (int) $data['quantity'])->load('medicine');
+        return DB::transaction(fn () => $this->inventory
+            ->stockOut($inventory, (int) $data['quantity'], $data['reason'], $request->user()->user_id)
+            ->load('medicine'));
+    }
+
+    /** Stock-in / stock-out / dispensed history (audit trail of every quantity change). */
+    public function transactions(Request $request)
+    {
+        $request->validate([
+            'type' => 'nullable|in:stock_in,stock_out,dispensed',
+            'from' => 'nullable|date',
+            'to' => 'nullable|date',
+        ]);
+
+        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name'])
+            ->when($request->type, fn ($q, $t) => $q->where('type', $t))
+            ->when($request->medicine_id, fn ($q, $id) => $q->where('medicine_id', $id))
+            ->when($request->from, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))
+            ->when($request->to, fn ($q, $d) => $q->whereDate('created_at', '<=', $d))
+            ->orderByDesc('created_at')
+            ->orderByDesc('transaction_id')
+            ->limit(500)
+            ->get();
     }
 
     public function alerts()

@@ -157,11 +157,14 @@ class RequestController extends Controller
         return $data;
     }
 
-    /** Medicine requests need stock; restock requests are only for medicines that are unavailable. */
+    /**
+     * Medicine requests need free stock (not already reserved for other approved requests);
+     * restock requests are only for medicines that are not available.
+     */
     private function checkAvailability(string $type, array $items): void
     {
         foreach ($items as $i => $item) {
-            $available = $this->inventory->availableStock($item['medicine_id']);
+            $available = $this->inventory->freeStock($item['medicine_id']);
 
             if ($type === 'medicine' && $available < $item['quantity']) {
                 throw ValidationException::withMessages([

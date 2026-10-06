@@ -9,6 +9,7 @@ use App\Models\Medicine;
 use App\Models\MedicineRequest;
 use App\Models\Report;
 use App\Models\RequestItem;
+use App\Models\StockTransaction;
 use App\Services\InventoryService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -26,6 +27,7 @@ class ReportController extends Controller
         'dispensing' => 'Dispensing Records',
         'most_requested' => 'Most Requested Medicines',
         'shortages' => 'Medicine Shortages',
+        'transactions' => 'Inventory Transactions (Stock-in / Stock-out)',
     ];
 
     public function __construct(private InventoryService $inventory) {}
@@ -54,6 +56,7 @@ class ReportController extends Controller
             'dispensing' => $this->dispensing($from, $to),
             'most_requested' => $this->mostRequested($from, $to),
             'shortages' => $this->shortages($from, $to),
+            'transactions' => $this->transactions($from, $to),
         };
 
         $dateRange = $type === 'inventory' ? 'As of ' . now()->toDateString() : "{$from} to {$to}";
@@ -146,6 +149,28 @@ class ReportController extends Controller
                 SUM(CASE WHEN requests.request_type = \'restock\' THEN 1 ELSE 0 END) as restock_requests')
             ->limit(20)
             ->get()->toArray();
+    }
+
+    private function transactions(string $from, string $to): array
+    {
+        $labels = ['stock_in' => 'Stock-in', 'stock_out' => 'Stock-out', 'dispensed' => 'Dispensed'];
+
+        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name'])
+            ->whereDate('created_at', '>=', $from)
+            ->whereDate('created_at', '<=', $to)
+            ->orderByDesc('created_at')
+            ->orderByDesc('transaction_id')
+            ->get()
+            ->map(fn (StockTransaction $t) => [
+                'date' => $t->created_at->toDateTimeString(),
+                'type' => $labels[$t->type] ?? $t->type,
+                'medicine' => $t->medicine?->medicine_name,
+                'quantity' => ($t->type === 'stock_in' ? '+' : '-') . $t->quantity . ' ' . ($t->medicine?->unit ?? ''),
+                'batch_no' => $t->inventory_id,
+                'batch_expiry' => $t->batch?->expiration_date?->toDateString(),
+                'reason' => $t->reason ?? ($t->dispensing_id ? "Dispensing #{$t->dispensing_id}" : null),
+                'performed_by' => $t->performer?->name,
+            ])->all();
     }
 
     private function shortages(string $from, string $to): array

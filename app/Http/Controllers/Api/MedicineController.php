@@ -5,14 +5,16 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Medicine;
 use App\Models\User;
+use App\Services\InventoryService;
 use Illuminate\Http\Request;
 
 /** Medicine records (admin & staff manage; everyone can view availability). */
 class MedicineController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request, InventoryService $inventory)
     {
         $isResident = $request->user()->role === User::ROLE_RESIDENT;
+        $reserved = $inventory->reservedByMedicine();
 
         $medicines = Medicine::withAvailableStock()
             ->when($request->search, fn ($q, $s) => $q->where(fn ($w) => $w
@@ -21,18 +23,24 @@ class MedicineController extends Controller
             ->orderBy('medicine_name')
             ->get();
 
-        return $medicines->map(function (Medicine $m) use ($isResident) {
-            $available = (int) ($m->available_stock ?? 0);
+        return $medicines->map(function (Medicine $m) use ($isResident, $reserved) {
+            $onShelf = (int) ($m->available_stock ?? 0);
+            $reservedQty = $reserved[$m->medicine_id] ?? 0;
+            $free = max(0, $onShelf - $reservedQty);
+
             $row = [
                 'medicine_id' => $m->medicine_id,
                 'medicine_name' => $m->medicine_name,
                 'category' => $m->category,
                 'unit' => $m->unit,
                 'description' => $m->description,
-                'available_stock' => $available,
-                'status' => Medicine::stockStatus($available, $m->reorder_level),
+                // Residents only see what they can still request (stock not reserved for approved requests).
+                'available_stock' => $isResident ? $free : $onShelf,
+                'status' => Medicine::stockStatus($isResident ? $free : $onShelf, $m->reorder_level),
             ];
             if (! $isResident) {
+                $row['reserved_stock'] = $reservedQty;
+                $row['free_stock'] = $free;
                 $row['reorder_level'] = $m->reorder_level;
                 $row['created_at'] = $m->created_at;
             }

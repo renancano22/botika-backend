@@ -62,6 +62,9 @@ class BotikaFlowTest extends TestCase
         $this->assertSame(18, $later->fresh()->quantity);
         $this->assertDatabaseHas('requests', ['request_id' => $requestId, 'status' => 'dispensed']);
         $this->assertDatabaseCount('notifications', 2); // approved + dispensed SMS
+        // Two batches were used, each logged as a "dispensed" stock transaction.
+        $this->assertDatabaseCount('stock_transactions', 2);
+        $this->assertDatabaseHas('stock_transactions', ['inventory_id' => $soon->inventory_id, 'type' => 'dispensed', 'quantity' => 8]);
     }
 
     public function test_restock_request_is_fulfilled_when_stock_arrives(): void
@@ -132,6 +135,47 @@ class BotikaFlowTest extends TestCase
 
         User::factory()->create(['email' => 'staff@example.com']);
         $this->postJson('/api/login', ['login' => 'staff@example.com', 'password' => 'password'])->assertOk();
+    }
+
+    public function test_approved_requests_reserve_stock_and_stock_changes_are_logged(): void
+    {
+        $staff = User::factory()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Amlodipine 5mg', 'category' => 'Antihypertensive', 'unit' => 'tablet', 'reorder_level' => 2]);
+
+        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $medicine->medicine_id, 'quantity' => 10, 'expiration_date' => now()->addYear()->toDateString()], $this->token($staff))
+            ->assertCreated();
+        $this->assertDatabaseHas('stock_transactions', ['medicine_id' => $medicine->medicine_id, 'type' => 'stock_in', 'quantity' => 10, 'performed_by' => $staff->user_id]);
+
+        $register = fn (string $name, string $phone) => $this->postJson('/api/register', [
+            'name' => $name, 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'address' => 'Zone 1, Bulan', 'contact_no' => $phone,
+        ])->assertCreated();
+        $a = $register('Resident A', '09170000001');
+        $b = $register('Resident B', '09170000002');
+
+        $requestA = $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 8]]],
+            ['Authorization' => 'Bearer ' . $a->json('token')])->assertCreated()->json('request_id');
+        $this->postJson("/api/requests/{$requestA}/approve", [], $this->token($staff))->assertOk();
+
+        // 10 on the shelf, 8 reserved for resident A: resident B cannot request 5.
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 5]]],
+            ['Authorization' => 'Bearer ' . $b->json('token')])->assertStatus(422);
+        // ...and a walk-in cannot take the reserved stock either.
+        $this->postJson('/api/dispensing/walk-in', ['qr_code' => $b->json('user.resident.qr_code'), 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 5]]],
+            $this->token($staff))->assertStatus(422);
+
+        $this->getJson('/api/medicines', $this->token($staff))
+            ->assertJsonPath('0.available_stock', 10)
+            ->assertJsonPath('0.reserved_stock', 8)
+            ->assertJsonPath('0.free_stock', 2);
+
+        // Stock-out needs a reason and is logged.
+        $batchId = \App\Models\Inventory::first()->inventory_id;
+        $this->postJson("/api/inventory/{$batchId}/stock-out", ['quantity' => 1], $this->token($staff))->assertStatus(422);
+        $this->postJson("/api/inventory/{$batchId}/stock-out", ['quantity' => 1, 'reason' => 'Damaged'], $this->token($staff))->assertOk();
+        $this->assertDatabaseHas('stock_transactions', ['type' => 'stock_out', 'quantity' => 1, 'reason' => 'Damaged']);
+
+        $this->getJson('/api/inventory/transactions', $this->token($staff))->assertOk()->assertJsonCount(2);
     }
 
     public function test_forecasting_techniques(): void

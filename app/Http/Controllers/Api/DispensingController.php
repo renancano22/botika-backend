@@ -70,6 +70,16 @@ class DispensingController extends Controller
 
         $resident = Resident::where('qr_code', $data['qr_code'])->firstOrFail();
 
+        // Walk-ins may only take stock that is not already reserved for approved requests.
+        foreach ($data['items'] as $i => $item) {
+            $free = $this->inventory->freeStock((int) $item['medicine_id']);
+            if ($free < (int) $item['quantity']) {
+                return response()->json([
+                    'message' => "Only {$free} can be dispensed for item #" . ($i + 1) . '. The rest is reserved for approved requests.',
+                ], 422);
+            }
+        }
+
         $dispensing = DB::transaction(function () use ($resident, $data, $request) {
             $req = MedicineRequest::create([
                 'resident_id' => $resident->resident_id,
@@ -94,15 +104,16 @@ class DispensingController extends Controller
     private function dispense(MedicineRequest $req, User $staff): Dispensing
     {
         $dispensing = DB::transaction(function () use ($req, $staff) {
-            foreach ($req->items as $item) {
-                $this->inventory->deduct($item->medicine_id, $item->quantity);
-            }
-
             $dispensing = Dispensing::create([
                 'request_id' => $req->request_id,
                 'dispensed_by' => $staff->user_id,
                 'dispensed_at' => now(),
             ]);
+
+            foreach ($req->items as $item) {
+                $this->inventory->deduct($item->medicine_id, $item->quantity, $staff->user_id, $dispensing->dispensing_id);
+            }
+
             $dispensing->items()->createMany($req->items->map->only(['medicine_id', 'quantity'])->all());
             $req->update(['status' => 'dispensed']);
 
