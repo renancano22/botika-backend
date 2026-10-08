@@ -13,8 +13,8 @@ class UserFactory extends Factory
     public function definition(): array
     {
         return [
-            'name' => fake()->name(),
-            'email' => fake()->unique()->safeEmail(),
+            'name' => 'Staff ' . fake()->lastName(),
+            'email' => fake()->unique()->userName() . '@gmail.com',
             'password_hash' => 'password',
             'role' => User::ROLE_STAFF,
             'is_active' => true,

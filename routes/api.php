@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\ForecastController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\MedicineController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RequestController;
 use App\Http\Controllers\Api\ResidentController;
@@ -16,6 +17,9 @@ use Illuminate\Support\Facades\Route;
 // ---- Public: resident registration and login
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+Route::post('/forgot-password', [PasswordResetController::class, 'sendCode'])->middleware('throttle:5,1');
+Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
+Route::get('/barangays', fn () => config('botika.barangays'));
 
 Route::middleware('auth:sanctum')->group(function () {
 

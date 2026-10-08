@@ -34,8 +34,8 @@ class BotikaFlowTest extends TestCase
         $later = Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 20, 'expiration_date' => now()->addYear()->toDateString()]);
 
         $reg = $this->postJson('/api/register', [
-            'name' => 'Maria Santos', 'email' => 'maria@example.com', 'password' => 'secret123',
-            'password_confirmation' => 'secret123', 'address' => 'Zone 2, Bulan', 'contact_no' => '09171234567',
+            'name' => 'Maria Santos', 'email' => 'maria@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09171234567',
         ])->assertCreated();
         $residentHeaders = ['Authorization' => 'Bearer ' . $reg->json('token')];
         $qr = $reg->json('user.resident.qr_code');
@@ -73,8 +73,8 @@ class BotikaFlowTest extends TestCase
         $medicine = Medicine::create(['medicine_name' => 'Losartan 50mg', 'category' => 'Antihypertensive', 'unit' => 'tablet', 'reorder_level' => 5]);
 
         $reg = $this->postJson('/api/register', [
-            'name' => 'Pedro Reyes', 'email' => 'pedro@example.com', 'password' => 'secret123',
-            'password_confirmation' => 'secret123', 'address' => 'Zone 3, Bulan', 'contact_no' => '09181234567',
+            'name' => 'Pedro Reyes', 'email' => 'pedro@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09181234567',
         ])->assertCreated();
         $headers = ['Authorization' => 'Bearer ' . $reg->json('token')];
 
@@ -103,8 +103,8 @@ class BotikaFlowTest extends TestCase
         $unused = Medicine::create(['medicine_name' => 'Typo entry', 'category' => 'Other', 'unit' => 'tablet', 'reorder_level' => 5]);
 
         $reg = $this->postJson('/api/register', [
-            'name' => 'Ana Cruz', 'email' => 'ana@example.com', 'password' => 'secret123',
-            'password_confirmation' => 'secret123', 'address' => 'Zone 4, Bulan', 'contact_no' => '09191234567',
+            'name' => 'Ana Cruz', 'email' => 'ana@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09191234567',
         ])->assertCreated();
         $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 5]]],
             ['Authorization' => 'Bearer ' . $reg->json('token')])->assertCreated();
@@ -120,13 +120,13 @@ class BotikaFlowTest extends TestCase
     {
         $this->postJson('/api/register', [
             'name' => 'Lola Nena', 'password' => 'secret123', 'password_confirmation' => 'secret123',
-            'address' => 'Zone 5, Bulan', 'contact_no' => '+63 917 555 0001',
+            'barangay' => 'Zone I Poblacion', 'contact_no' => '+63 917 555 0001',
         ])->assertCreated()->assertJsonPath('user.resident.contact_no', '09175550001');
 
         // Same number written differently is still recognised as already registered.
         $this->postJson('/api/register', [
             'name' => 'Someone Else', 'password' => 'secret123', 'password_confirmation' => 'secret123',
-            'address' => 'Zone 6, Bulan', 'contact_no' => '0917-555-0001',
+            'barangay' => 'Zone I Poblacion', 'contact_no' => '0917-555-0001',
         ])->assertStatus(422);
 
         $this->postJson('/api/login', ['login' => '09175550001', 'password' => 'secret123'])->assertOk();
@@ -148,7 +148,7 @@ class BotikaFlowTest extends TestCase
 
         $register = fn (string $name, string $phone) => $this->postJson('/api/register', [
             'name' => $name, 'password' => 'secret123', 'password_confirmation' => 'secret123',
-            'address' => 'Zone 1, Bulan', 'contact_no' => $phone,
+            'barangay' => 'Zone I Poblacion', 'contact_no' => $phone,
         ])->assertCreated();
         $a = $register('Resident A', '09170000001');
         $b = $register('Resident B', '09170000002');
@@ -176,6 +176,62 @@ class BotikaFlowTest extends TestCase
         $this->assertDatabaseHas('stock_transactions', ['type' => 'stock_out', 'quantity' => 1, 'reason' => 'Damaged']);
 
         $this->getJson('/api/inventory/transactions', $this->token($staff))->assertOk()->assertJsonCount(2);
+    }
+
+    public function test_registration_validation_and_barangay_address(): void
+    {
+        $base = ['name' => 'Jose Rizal', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Zone I Poblacion', 'contact_no' => '09170001111'];
+
+        $this->postJson('/api/register', $base + ['email' => 'jose@yahoo.com'])->assertStatus(422)->assertJsonValidationErrors('email');
+        $this->postJson('/api/register', ['barangay' => 'Manila'] + $base)->assertStatus(422)->assertJsonValidationErrors('barangay');
+        $this->postJson('/api/register', ['password' => 'onlyletters', 'password_confirmation' => 'onlyletters'] + $base)
+            ->assertStatus(422)->assertJsonValidationErrors('password');
+        $this->postJson('/api/register', ['name' => 'J0se 123'] + $base)->assertStatus(422)->assertJsonValidationErrors('name');
+
+        $this->postJson('/api/register', $base + ['email' => 'Jose@Gmail.com', 'address_line' => 'Purok 3'])
+            ->assertCreated()
+            ->assertJsonPath('user.email', 'jose@gmail.com')
+            ->assertJsonPath('user.resident.address', 'Purok 3, Zone I Poblacion, Bulan, Sorsogon');
+
+        $this->getJson('/api/barangays')->assertOk()->assertJsonCount(63);
+    }
+
+    public function test_forgot_password_with_sms_code(): void
+    {
+        $sent = null;
+        $this->mock(\App\Services\SmsService::class, function ($mock) use (&$sent) {
+            $mock->shouldReceive('sendTo')->andReturnUsing(function ($number, $message) use (&$sent) {
+                $sent = $message;
+                return 'logged';
+            });
+        });
+
+        $this->postJson('/api/register', [
+            'name' => 'Nena Reyes', 'password' => 'oldpass123', 'password_confirmation' => 'oldpass123',
+            'barangay' => 'Bical', 'contact_no' => '09172223333',
+        ])->assertCreated();
+
+        // Unknown accounts get the same answer (no hint whether the number is registered).
+        $this->postJson('/api/forgot-password', ['login' => '09999999999'])->assertOk();
+        $this->assertNull($sent);
+
+        $this->postJson('/api/forgot-password', ['login' => '09172223333'])->assertOk();
+        $this->assertNotNull($sent);
+        preg_match('/\b(\d{6})\b/', $sent, $m);
+        $code = $m[1];
+
+        $wrong = $code === '000000' ? '111111' : '000000';
+        $this->postJson('/api/reset-password', ['login' => '09172223333', 'code' => $wrong, 'password' => 'newpass123', 'password_confirmation' => 'newpass123'])
+            ->assertStatus(422);
+        $this->postJson('/api/reset-password', ['login' => '09172223333', 'code' => $code, 'password' => 'newpass123', 'password_confirmation' => 'newpass123'])
+            ->assertOk();
+
+        $this->postJson('/api/login', ['login' => '09172223333', 'password' => 'oldpass123'])->assertStatus(422);
+        $this->postJson('/api/login', ['login' => '09172223333', 'password' => 'newpass123'])->assertOk();
+        // A used code cannot be used again.
+        $this->postJson('/api/reset-password', ['login' => '09172223333', 'code' => $code, 'password' => 'another123', 'password_confirmation' => 'another123'])
+            ->assertStatus(422);
     }
 
     public function test_forecasting_techniques(): void

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Resident;
 use App\Models\User;
+use App\Support\Rules;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -16,18 +17,28 @@ class AuthController extends Controller
     /** Residents register with a mobile number; an email address is optional. */
     public function register(Request $request)
     {
-        $request->merge(['contact_no' => Resident::normalizePhone($request->input('contact_no'))]);
+        $request->merge([
+            'contact_no' => Resident::normalizePhone($request->input('contact_no')),
+            'email' => $request->filled('email') ? strtolower(trim($request->input('email'))) : null,
+            'name' => trim((string) $request->input('name')),
+        ]);
 
         $data = $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'nullable|email|max:255|unique:users,email',
-            'password' => 'required|string|min:8|confirmed',
-            'address' => 'required|string|max:255',
+            'name' => Rules::name(),
+            'email' => [...Rules::gmail(false), 'unique:users,email'],
+            'password' => [...Rules::password(), 'confirmed'],
+            'barangay' => Rules::barangay(),
+            'address_line' => ['nullable', 'string', 'max:120'],
             'contact_no' => ['required', 'string', 'regex:/^09\d{9}$/', 'unique:residents,contact_no'],
-        ], [
+        ], Rules::messages() + [
             'contact_no.regex' => 'Enter a valid mobile number, e.g. 09171234567.',
             'contact_no.unique' => 'This mobile number is already registered. Please log in instead.',
+            'email.unique' => 'This email is already registered. Please log in instead.',
         ]);
+
+        // Stored as e.g. "Purok 3, Zone I Poblacion, Bulan, Sorsogon".
+        $data['address'] = collect([trim((string) ($data['address_line'] ?? '')), $data['barangay'], 'Bulan, Sorsogon'])
+            ->filter()->implode(', ');
 
         $user = DB::transaction(function () use ($data) {
             $user = User::create([
@@ -65,10 +76,7 @@ class AuthController extends Controller
             'login.required' => 'Enter your email or mobile number.',
         ]);
 
-        $login = trim($data['login']);
-        $user = str_contains($login, '@')
-            ? User::where('email', $login)->first()
-            : Resident::where('contact_no', Resident::normalizePhone($login))->first()?->user;
+        $user = User::findByLogin($data['login']);
 
         if (! $user || ! Hash::check($data['password'], $user->password_hash)) {
             throw ValidationException::withMessages(['login' => 'Invalid email/mobile number or password.']);

@@ -37,6 +37,16 @@ class User extends Authenticatable
         return null; // API token auth only; the ERD has no remember_token column
     }
 
+    /** Finds an account by email address or by a resident's registered mobile number. */
+    public static function findByLogin(string $login): ?self
+    {
+        $login = trim($login);
+        if (str_contains($login, '@')) {
+            return static::where('email', strtolower($login))->first();
+        }
+        return Resident::where('contact_no', Resident::normalizePhone($login))->first()?->user;
+    }
+
     public function resident(): HasOne
     {
         return $this->hasOne(Resident::class, 'user_id', 'user_id');

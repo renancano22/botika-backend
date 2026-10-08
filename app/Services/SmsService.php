@@ -25,6 +25,15 @@ class SmsService
         ]);
     }
 
+    /**
+     * Sends an SMS without saving it to the notifications log (used for password reset codes).
+     * @return string sent | failed | logged
+     */
+    public function sendTo(string $number, string $message): string
+    {
+        return $this->send($number, $message);
+    }
+
     /** @return string sent | failed | logged */
     protected function send(string $number, string $message): string
     {

@@ -14,17 +14,18 @@ Artisan::command('inspire', function () {
 */
 Artisan::command('botika:create-admin', function () {
     $name = trim((string) $this->ask('Full name of the administrator'));
-    $email = strtolower(trim((string) $this->ask('Email address (used to log in)')));
-    $password = (string) $this->secret('Password (at least 8 characters)');
+    $email = strtolower(trim((string) $this->ask('Gmail address (used to log in)')));
+    $password = (string) $this->secret('Password (at least 8 characters, with letters and numbers)');
     $confirm = (string) $this->secret('Type the password again');
 
     $validator = \Illuminate\Support\Facades\Validator::make(
         ['name' => $name, 'email' => $email, 'password' => $password, 'password_confirmation' => $confirm],
         [
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|max:255|unique:users,email',
-            'password' => 'required|string|min:8|confirmed',
-        ]
+            'name' => \App\Support\Rules::name(),
+            'email' => [...\App\Support\Rules::gmail(), 'unique:users,email'],
+            'password' => [...\App\Support\Rules::password(), 'confirmed'],
+        ],
+        \App\Support\Rules::messages()
     );
 
     if ($validator->fails()) {

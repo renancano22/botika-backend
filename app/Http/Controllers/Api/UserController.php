@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\Rules;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -23,12 +24,13 @@ class UserController extends Controller
 
     public function store(Request $request)
     {
+        $request->merge(['email' => strtolower(trim((string) $request->input('email'))), 'name' => trim((string) $request->input('name'))]);
         $data = $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|max:255|unique:users,email',
-            'password' => 'required|string|min:8',
+            'name' => Rules::name(),
+            'email' => [...Rules::gmail(), 'unique:users,email'],
+            'password' => Rules::password(),
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF])],
-        ]);
+        ], Rules::messages());
 
         return response()->json(User::create([
             'name' => $data['name'],
@@ -40,13 +42,17 @@ class UserController extends Controller
 
     public function update(Request $request, User $user)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:255',
-            // Residents may have no email (they log in with their mobile number); staff and admin need one.
-            'email' => [$user->role === User::ROLE_RESIDENT ? 'nullable' : 'required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
-            'password' => 'nullable|string|min:8',
-            'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF, User::ROLE_RESIDENT])],
+        $request->merge([
+            'email' => $request->filled('email') ? strtolower(trim($request->input('email'))) : null,
+            'name' => trim((string) $request->input('name')),
         ]);
+        $data = $request->validate([
+            'name' => Rules::name(),
+            // Residents may have no email (they log in with their mobile number); staff and admin need one.
+            'email' => [...Rules::gmail($user->role !== User::ROLE_RESIDENT), Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
+            'password' => Rules::password(false),
+            'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF, User::ROLE_RESIDENT])],
+        ], Rules::messages());
 
         // A resident account must stay a resident (it is linked to a resident profile).
         if ($user->role === User::ROLE_RESIDENT && $data['role'] !== User::ROLE_RESIDENT) {
