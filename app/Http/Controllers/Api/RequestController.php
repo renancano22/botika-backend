@@ -71,6 +71,16 @@ class RequestController extends Controller
             return $req;
         });
 
+        // In-app confirmation only (no SMS, to save SMS credits).
+        $this->sms->notifyInApp(
+            $resident,
+            $data['request_type'] === 'restock'
+                ? "Your restock request #{$req->request_id} has been submitted and is now under review by the administrator."
+                : "Your medicine request #{$req->request_id} has been submitted and is now under review by the pharmacy staff.",
+            $req->request_id,
+            'submitted'
+        );
+
         return response()->json($req->load('items.medicine'), 201);
     }
 
@@ -111,6 +121,14 @@ class RequestController extends Controller
         if ($wasReserved) {
             $this->inventory->releaseReserved($medicineRequest->items()->pluck('medicine_id'));
         }
+
+        // In-app confirmation only (the resident cancelled it themselves).
+        $this->sms->notifyInApp(
+            $medicineRequest->resident,
+            "You cancelled your {$medicineRequest->request_type} request #{$medicineRequest->request_id}. You may submit a new request anytime.",
+            $medicineRequest->request_id,
+            'cancelled'
+        );
 
         return $medicineRequest->fresh(self::DETAILS);
     }

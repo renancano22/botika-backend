@@ -12,6 +12,13 @@ use Illuminate\Http\Request;
 /** Notification System (Objective 3.3). */
 class NotificationController extends Controller
 {
+    private const CATEGORY_LABEL = [
+        'general' => null,
+        'closure' => 'Pharmacy Closure',
+        'hours' => 'Operating Hours',
+        'distribution' => 'Medicine Distribution',
+    ];
+
     public function __construct(private SmsService $sms) {}
 
     public function index(Request $request)
@@ -77,6 +84,7 @@ class NotificationController extends Controller
     public function announce(Request $request)
     {
         $data = $request->validate([
+            'category' => 'nullable|in:general,closure,hours,distribution',
             'message' => 'required|string|max:300',
             'resident_ids' => 'nullable|array',
             'resident_ids.*' => 'exists:residents,resident_id',
@@ -86,7 +94,13 @@ class NotificationController extends Controller
             ? Resident::all()
             : Resident::whereIn('resident_id', $data['resident_ids'])->get();
 
-        $results = $residents->map(fn (Resident $r) => $this->sms->notify($r, "BulanBotikaCare: {$data['message']}"));
+        // closure = Temporary Pharmacy Closure, hours = Operating Hours, distribution = Medicine Distribution
+        $category = $data['category'] ?? 'general';
+        $label = self::CATEGORY_LABEL[$category];
+        $text = $label ? "BulanBotikaCare ({$label}): {$data['message']}" : "BulanBotikaCare: {$data['message']}";
+        $type = $category === 'general' ? 'announcement' : $category;
+
+        $results = $residents->map(fn (Resident $r) => $this->sms->notify($r, $text, null, $type));
 
         return [
             'total' => $results->count(),

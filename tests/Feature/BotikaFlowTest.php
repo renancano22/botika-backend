@@ -61,7 +61,7 @@ class BotikaFlowTest extends TestCase
         $this->assertSame(0, $soon->fresh()->quantity);     // first-expiry-first-out
         $this->assertSame(18, $later->fresh()->quantity);
         $this->assertDatabaseHas('requests', ['request_id' => $requestId, 'status' => 'dispensed']);
-        $this->assertDatabaseCount('notifications', 2); // approved + dispensed SMS
+        $this->assertDatabaseCount('notifications', 3); // submitted (in-app) + approved + dispensed SMS
         // Two batches were used, each logged as a "dispensed" stock transaction.
         $this->assertDatabaseCount('stock_transactions', 2);
         $this->assertDatabaseHas('stock_transactions', ['inventory_id' => $soon->inventory_id, 'type' => 'dispensed', 'quantity' => 8]);
@@ -294,9 +294,11 @@ class BotikaFlowTest extends TestCase
 
         // The administrator's SMS announcements are also saved as in-app notifications.
         $this->postJson('/api/notifications/announce', ['message' => 'Free check-up on Friday.'], $this->token($admin))->assertOk();
-        $this->postJson('/api/notifications/announce', ['message' => 'Closed on Monday.'], $this->token($admin))->assertOk();
+        $this->postJson('/api/notifications/announce', ['message' => 'Closed on Monday.', 'category' => 'closure'], $this->token($admin))->assertOk();
+        $this->assertDatabaseHas('notifications', ['type' => 'closure', 'message' => 'BulanBotikaCare (Pharmacy Closure): Closed on Monday.']);
+        $this->postJson('/api/notifications/announce', ['message' => 'x', 'category' => 'party'], $this->token($admin))->assertStatus(422);
 
-        $list = $this->getJson('/api/notifications', $headersA)->assertOk()->assertJsonCount(2)->assertJsonPath('0.type', 'announcement')->json();
+        $list = $this->getJson('/api/notifications', $headersA)->assertOk()->assertJsonCount(2)->json();
         $this->assertNull($list[0]['read_at']);
         $this->getJson('/api/notifications/unread-count', $headersA)->assertJsonPath('unread', 2);
 
@@ -352,25 +354,37 @@ class BotikaFlowTest extends TestCase
         $this->assertDatabaseHas('requests', ['request_id' => $restockB, 'status' => 'fulfilled']);
         $this->assertNotNull(\App\Models\MedicineRequest::find($restockB)->fulfilled_at);
 
-        // B's approved request is not claimed within the allowed days, so it is cancelled automatically.
+        // Submitting and cancelling create in-app confirmations (no SMS).
+        $this->assertDatabaseHas('notifications', ['request_id' => $requestA, 'type' => 'submitted', 'channel' => 'app']);
+        $this->assertDatabaseHas('notifications', ['request_id' => $requestA, 'type' => 'cancelled', 'channel' => 'app']);
+
+        // B's approved request: a reminder one day before the deadline, then it expires.
         $requestB = $this->postJson('/api/requests', ['request_type' => 'medicine', ...$item(6)], $headersB)->assertCreated()->json('request_id');
         $this->postJson("/api/requests/{$requestB}/approve", [], $this->token($staff))->assertOk();
+        $days = config('botika.unclaimed_days');
 
-        $this->travel(config('botika.unclaimed_days') + 1)->days();
+        $this->travel($days - 1)->days();
+        $this->getJson('/api/medicines', $this->token($staff))->assertOk();
+        $this->assertDatabaseHas('notifications', ['request_id' => $requestB, 'type' => 'reminder']);
+        $this->assertDatabaseHas('requests', ['request_id' => $requestB, 'status' => 'approved']);
+        $this->travel(15)->minutes();
+        $this->getJson('/api/medicines', $this->token($staff))->assertOk();
+        $this->assertSame(1, \App\Models\Notification::where('request_id', $requestB)->where('type', 'reminder')->count()); // sent once
+
+        $this->travel(2)->days();
         // Logins expire after 12 hours, so resident B logs in again.
         $headersB = $this->token(User::where('name', 'Resident B')->first());
         $list = $this->getJson('/api/requests', $headersB)->assertOk()->json();
         $expired = collect($list)->firstWhere('request_id', $requestB);
-        $this->assertSame('cancelled', $expired['status']);
+        $this->assertSame('expired', $expired['status']);
         $this->assertNull($expired['cancelled_by']);
-        $this->assertDatabaseHas('notifications', ['request_id' => $requestB, 'type' => 'cancelled']);
+        $this->assertNotNull($expired['cancelled_at']);
+        $this->assertDatabaseHas('notifications', ['request_id' => $requestB, 'type' => 'expired']);
 
         // One request can be opened on its own page, but only by its owner (or staff).
-        $this->getJson("/api/requests/{$requestB}", $headersB)->assertOk()->assertJsonPath('status', 'cancelled');
+        $this->getJson("/api/requests/{$requestB}", $headersB)->assertOk()->assertJsonPath('status', 'expired');
         $this->getJson("/api/requests/{$requestB}", $this->token(User::where('name', 'Resident A')->first()))->assertNotFound();
         $this->getJson("/api/requests/{$requestB}", $this->token($staff))->assertOk();
-        $this->assertNotNull($expired['cancelled_at']);
-        $this->assertDatabaseHas('notifications', ['request_id' => $requestB, 'message' => "BulanBotikaCare: Your medicine request #{$requestB} was cancelled because it was not claimed within 7 days of approval. You may submit a new request anytime."]);
         $this->getJson('/api/medicines', $this->token($staff))->assertJsonPath('0.free_stock', 10);
     }
 

@@ -15,8 +15,8 @@ class MedicineRequest extends Model
     public $timestamps = false;
 
     protected $fillable = ['resident_id', 'request_type', 'request_date', 'status', 'reviewed_by', 'reviewed_at', 'remarks',
-        'cancelled_at', 'cancelled_by', 'fulfilled_at'];
-    protected $casts = ['request_date' => 'datetime', 'reviewed_at' => 'datetime', 'cancelled_at' => 'datetime', 'fulfilled_at' => 'datetime'];
+        'cancelled_at', 'cancelled_by', 'fulfilled_at', 'reminded_at'];
+    protected $casts = ['request_date' => 'datetime', 'reviewed_at' => 'datetime', 'cancelled_at' => 'datetime', 'fulfilled_at' => 'datetime', 'reminded_at' => 'datetime'];
     protected $appends = ['claim_by'];
 
     public function resident(): BelongsTo
@@ -34,7 +34,7 @@ class MedicineRequest extends Model
         return $this->belongsTo(User::class, 'cancelled_by', 'user_id');
     }
 
-    /** Last day to claim an approved medicine request before it is cancelled automatically. */
+    /** Last day to claim an approved medicine request before it expires. */
     public function getClaimByAttribute(): ?string
     {
         if ($this->request_type !== 'medicine' || $this->status !== 'approved' || ! $this->reviewed_at) {

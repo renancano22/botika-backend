@@ -11,8 +11,9 @@ use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
 /**
- * Cancels approved requests that were not claimed in time. The free online server has no
- * scheduled jobs, so this check runs together with normal API calls, at most once every 10 minutes.
+ * Pickup deadline check: sends "claim before the deadline" reminders and marks requests that were
+ * not claimed in time as expired. The free online server has no scheduled jobs, so this check runs
+ * together with normal API calls, at most once every 10 minutes.
  */
 class ExpireUnclaimedRequests
 {
@@ -22,9 +23,9 @@ class ExpireUnclaimedRequests
     {
         if (Cache::add('botika:expire-unclaimed-check', true, now()->addMinutes(10))) {
             try {
-                $this->inventory->expireUnclaimedRequests();
+                $this->inventory->checkPickupDeadlines();
             } catch (Throwable $e) {
-                Log::warning('Unclaimed request check failed: ' . $e->getMessage());
+                Log::warning('Pickup deadline check failed: ' . $e->getMessage());
             }
         }
 

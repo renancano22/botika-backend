@@ -13,7 +13,8 @@ class SmsService
 {
     /**
      * Sends the SMS and keeps it in the resident's in-app notifications.
-     * $type: approved | rejected | dispensed | cancelled | available | announcement
+     * $type: approved | rejected | dispensed | cancelled | expired | reminder | available |
+     *        announcement | closure | hours | distribution
      */
     public function notify(Resident $resident, string $message, ?int $requestId = null, string $type = 'announcement'): Notification
     {
@@ -26,6 +27,22 @@ class SmsService
             'message' => $message,
             'channel' => 'sms',
             'status' => $status,
+            'sent_at' => now(),
+        ]);
+    }
+
+    /**
+     * In-app notification only (no SMS, so no SMS credits are used), e.g. "request submitted".
+     */
+    public function notifyInApp(Resident $resident, string $message, ?int $requestId, string $type): Notification
+    {
+        return Notification::create([
+            'resident_id' => $resident->resident_id,
+            'request_id' => $requestId,
+            'type' => $type,
+            'message' => $message,
+            'channel' => 'app',
+            'status' => 'sent',
             'sent_at' => now(),
         ]);
     }

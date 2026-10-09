@@ -193,13 +193,16 @@ class InventoryService
     }
 
     /**
-     * Cancels approved medicine requests that were not claimed within the allowed days
-     * (config botika.unclaimed_days). Their set-aside medicine goes back to the available stock,
-     * the resident gets an SMS, and waiting restock requests are checked again.
+     * Pickup deadline rules for approved medicine requests (config botika.unclaimed_days):
+     * - one day before the deadline, the resident gets a reminder (SMS + in-app, sent once);
+     * - when the deadline passes without collection, the request becomes "expired", its
+     *   set-aside medicine goes back to the stock and the resident is notified.
+     * @return array{reminded: int, expired: int}
      */
-    public function expireUnclaimedRequests(): int
+    public function checkPickupDeadlines(): array
     {
         $days = config('botika.unclaimed_days');
+
         $expired = MedicineRequest::with(['items.medicine', 'resident'])
             ->where('request_type', 'medicine')
             ->where('status', 'approved')
@@ -207,18 +210,36 @@ class InventoryService
             ->get();
 
         foreach ($expired as $req) {
-            $req->update(['status' => 'cancelled', 'cancelled_at' => now(), 'cancelled_by' => null]);
+            $deadline = $req->reviewed_at->copy()->addDays($days)->format('M j, Y');
+            $req->update(['status' => 'expired', 'cancelled_at' => now(), 'cancelled_by' => null]);
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Your medicine request #{$req->request_id} was cancelled because it was not claimed within {$days} days of approval. You may submit a new request anytime.",
+                "BulanBotikaCare: Request #{$req->request_id} has EXPIRED. The pickup deadline ({$deadline}) passed. Please submit a new request if you still need the medicine.",
                 $req->request_id,
-                'cancelled'
+                'expired'
+            );
+        }
+        $this->releaseReserved($expired->flatMap(fn ($r) => $r->items->pluck('medicine_id')));
+
+        $dueSoon = MedicineRequest::with('resident')
+            ->where('request_type', 'medicine')
+            ->where('status', 'approved')
+            ->whereNull('reminded_at')
+            ->where('reviewed_at', '<=', now()->subDays(max(0, $days - 1)))
+            ->get();
+
+        foreach ($dueSoon as $req) {
+            $deadline = $req->reviewed_at->copy()->addDays($days)->format('M j, Y');
+            $req->update(['reminded_at' => now()]);
+            $this->sms->notify(
+                $req->resident,
+                "BulanBotikaCare: Reminder: please claim your medicines for request #{$req->request_id} at Botika ng Bayan Bulan on or before {$deadline}, or the request will expire.",
+                $req->request_id,
+                'reminder'
             );
         }
 
-        $this->releaseReserved($expired->flatMap(fn ($r) => $r->items->pluck('medicine_id')));
-
-        return $expired->count();
+        return ['reminded' => $dueSoon->count(), 'expired' => $expired->count()];
     }
 
     /** After set-aside stock is released, waiting restock requests for those medicines may now be fulfilled. */
