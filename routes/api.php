@@ -33,6 +33,7 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::get('/medicines', [MedicineController::class, 'index']);
         Route::get('/medicines/categories', [MedicineController::class, 'categories']);
         Route::get('/requests', [RequestController::class, 'index']);
+        Route::get('/requests/{medicineRequest}', [RequestController::class, 'show']);
         Route::get('/dispensing', [DispensingController::class, 'index']);
         Route::get('/notifications', [NotificationController::class, 'index']);
     });

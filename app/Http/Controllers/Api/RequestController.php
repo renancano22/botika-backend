@@ -41,6 +41,17 @@ class RequestController extends Controller
             ->get();
     }
 
+    /** One request with its full status history (residents can only open their own). */
+    public function show(Request $request, MedicineRequest $medicineRequest)
+    {
+        $user = $request->user();
+        if ($user->role === User::ROLE_RESIDENT) {
+            abort_unless((int) $medicineRequest->resident_id === (int) $user->resident?->resident_id, 404);
+        }
+
+        return $medicineRequest->load(self::DETAILS);
+    }
+
     public function store(Request $request)
     {
         $resident = $request->user()->resident;
@@ -126,7 +137,7 @@ class RequestController extends Controller
             'reviewed_at' => now(),
             'remarks' => $request->input('remarks'),
         ]);
-        $this->sms->notify($medicineRequest->resident, $message, $medicineRequest->request_id);
+        $this->sms->notify($medicineRequest->resident, $message, $medicineRequest->request_id, 'approved');
 
         // If the medicine was restocked while the request was waiting, mark it fulfilled right away.
         if ($medicineRequest->request_type === 'restock') {
@@ -154,7 +165,8 @@ class RequestController extends Controller
         $this->sms->notify(
             $medicineRequest->resident,
             "BulanBotikaCare: Your {$type} request #{$medicineRequest->request_id} was not approved. Reason: {$data['remarks']}",
-            $medicineRequest->request_id
+            $medicineRequest->request_id,
+            'rejected'
         );
 
         return $medicineRequest->fresh(self::DETAILS);

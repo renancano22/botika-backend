@@ -123,7 +123,7 @@ class DispensingController extends Controller
         // Parallel steps after the inventory update (Activity Diagram): SMS + demand forecast refresh.
         $dispensing->load('items.medicine');
         $names = $dispensing->items->map(fn ($i) => "{$i->medicine->medicine_name} x{$i->quantity}")->implode(', ');
-        $this->sms->notify($req->resident, "BulanBotikaCare: Medicines dispensed to you today: {$names}. Thank you!", $req->request_id);
+        $this->sms->notify($req->resident, "BulanBotikaCare: Medicines dispensed to you today: {$names}. Thank you!", $req->request_id, 'dispensed');
 
         try {
             foreach ($dispensing->items as $item) {

@@ -296,7 +296,7 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/notifications/announce', ['message' => 'Free check-up on Friday.'], $this->token($admin))->assertOk();
         $this->postJson('/api/notifications/announce', ['message' => 'Closed on Monday.'], $this->token($admin))->assertOk();
 
-        $list = $this->getJson('/api/notifications', $headersA)->assertOk()->assertJsonCount(2)->json();
+        $list = $this->getJson('/api/notifications', $headersA)->assertOk()->assertJsonCount(2)->assertJsonPath('0.type', 'announcement')->json();
         $this->assertNull($list[0]['read_at']);
         $this->getJson('/api/notifications/unread-count', $headersA)->assertJsonPath('unread', 2);
 
@@ -359,6 +359,12 @@ class BotikaFlowTest extends TestCase
         $expired = collect($list)->firstWhere('request_id', $requestB);
         $this->assertSame('cancelled', $expired['status']);
         $this->assertNull($expired['cancelled_by']);
+        $this->assertDatabaseHas('notifications', ['request_id' => $requestB, 'type' => 'cancelled']);
+
+        // One request can be opened on its own page, but only by its owner (or staff).
+        $this->getJson("/api/requests/{$requestB}", $headersB)->assertOk()->assertJsonPath('status', 'cancelled');
+        $this->getJson("/api/requests/{$requestB}", $this->token(User::where('name', 'Resident A')->first()))->assertNotFound();
+        $this->getJson("/api/requests/{$requestB}", $this->token($staff))->assertOk();
         $this->assertNotNull($expired['cancelled_at']);
         $this->assertDatabaseHas('notifications', ['request_id' => $requestB, 'message' => "BulanBotikaCare: Your medicine request #{$requestB} was cancelled because it was not claimed within 7 days of approval. You may submit a new request anytime."]);
         $this->getJson('/api/medicines', $this->token($staff))->assertJsonPath('0.free_stock', 10);

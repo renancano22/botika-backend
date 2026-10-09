@@ -14,7 +14,7 @@ class Notification extends Model
     protected $primaryKey = 'notification_id';
     public $timestamps = false;
 
-    protected $fillable = ['resident_id', 'request_id', 'message', 'channel', 'status', 'sent_at', 'read_at'];
+    protected $fillable = ['resident_id', 'request_id', 'type', 'message', 'channel', 'status', 'sent_at', 'read_at'];
     protected $casts = ['sent_at' => 'datetime', 'read_at' => 'datetime'];
 
     public function resident(): BelongsTo

@@ -186,7 +186,8 @@ class InventoryService
             $this->sms->notify(
                 $req->resident,
                 "BulanBotikaCare: Good news! {$names} is now available at Botika ng Bayan Bulan. You may now submit a medicine request.",
-                $req->request_id
+                $req->request_id,
+                'available'
             );
         }
     }
@@ -210,7 +211,8 @@ class InventoryService
             $this->sms->notify(
                 $req->resident,
                 "BulanBotikaCare: Your medicine request #{$req->request_id} was cancelled because it was not claimed within {$days} days of approval. You may submit a new request anytime.",
-                $req->request_id
+                $req->request_id,
+                'cancelled'
             );
         }
 

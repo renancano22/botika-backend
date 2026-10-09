@@ -11,13 +11,18 @@ use Throwable;
 /** Notification System (DFD Process 4.0): SMS to residents through the Semaphore SMS API. */
 class SmsService
 {
-    public function notify(Resident $resident, string $message, ?int $requestId = null): Notification
+    /**
+     * Sends the SMS and keeps it in the resident's in-app notifications.
+     * $type: approved | rejected | dispensed | cancelled | available | announcement
+     */
+    public function notify(Resident $resident, string $message, ?int $requestId = null, string $type = 'announcement'): Notification
     {
         $status = $this->send($resident->contact_no, $message);
 
         return Notification::create([
             'resident_id' => $resident->resident_id,
             'request_id' => $requestId,
+            'type' => $type,
             'message' => $message,
             'channel' => 'sms',
             'status' => $status,
