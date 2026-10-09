@@ -197,13 +197,18 @@ class RequestController extends Controller
         $rules = [
             'items' => 'required|array|min:1',
             'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
-            'items.*.quantity' => 'required|integer|min:1|max:1000',
+            'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_request_quantity'),
         ];
         if ($withType) {
             $rules['request_type'] = ['required', Rule::in(['medicine', 'restock'])];
         }
 
-        $data = $request->validate($rules);
+        $data = $request->validate($rules, [
+            'items.*.quantity.max' => 'You can request at most :max per medicine.',
+            'items.*.quantity.min' => 'The quantity must be at least 1.',
+            'items.*.quantity.integer' => 'The quantity must be a whole number.',
+            'items.*.medicine_id.distinct' => 'This medicine is already in your request.',
+        ]);
         $data['items'] = array_map(fn ($i) => [
             'medicine_id' => (int) $i['medicine_id'],
             'quantity' => (int) $i['quantity'],
