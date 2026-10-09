@@ -11,8 +11,11 @@ class Resident extends Model
     protected $primaryKey = 'resident_id';
     const UPDATED_AT = null;
 
-    protected $fillable = ['user_id', 'name', 'address', 'contact_no', 'qr_code'];
+    protected $fillable = ['user_id', 'name', 'address', 'contact_no', 'qr_code', 'photo'];
     protected $casts = ['created_at' => 'datetime'];
+
+    /** The profile picture is only sent where it is shown (own account / profile), to keep lists light. */
+    protected $hidden = ['photo'];
 
     public function user(): BelongsTo
     {
@@ -42,6 +45,30 @@ class Resident extends Model
             $digits = '0' . $digits;
         }
         return $digits;
+    }
+
+    /** Builds the stored address, e.g. "Purok 3, Zone I Poblacion, Bulan, Sorsogon". */
+    public static function composeAddress(?string $addressLine, string $barangay): string
+    {
+        return collect([trim((string) $addressLine), $barangay, 'Bulan, Sorsogon'])->filter()->implode(', ');
+    }
+
+    /**
+     * Splits a stored address back into the barangay and the house no. / street / purok part
+     * (for the profile form). Older addresses typed by hand may have no barangay from the list.
+     * @return array{barangay: ?string, address_line: string}
+     */
+    public static function splitAddress(?string $address): array
+    {
+        $rest = preg_replace('/,?\s*Bulan\s*,?\s*Sorsogon\.?\s*$/i', '', trim((string) $address));
+        $parts = array_values(array_filter(array_map('trim', explode(',', (string) $rest)), 'strlen'));
+
+        $barangay = null;
+        if ($parts && in_array(end($parts), config('botika.barangays'), true)) {
+            $barangay = array_pop($parts);
+        }
+
+        return ['barangay' => $barangay, 'address_line' => implode(', ', $parts)];
     }
 
     /** Patient ID printed on / encoded in the resident's QR code, e.g. BBC-000001. */

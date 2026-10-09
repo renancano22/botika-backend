@@ -234,6 +234,83 @@ class BotikaFlowTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_resident_profile_photo_and_password(): void
+    {
+        $reg = $this->postJson('/api/register', [
+            'name' => 'Ana Cruz', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Gate', 'address_line' => 'Purok 2', 'contact_no' => '09191234567',
+        ])->assertCreated();
+        $headers = ['Authorization' => 'Bearer ' . $reg->json('token')];
+
+        $this->getJson('/api/profile', $headers)->assertOk()
+            ->assertJsonPath('barangay', 'Gate')
+            ->assertJsonPath('address_line', 'Purok 2')
+            ->assertJsonPath('user.resident.qr_code', 'BBC-000001');
+
+        // Edit information (the Patient ID stays the same).
+        $this->putJson('/api/profile', [
+            'name' => 'Ana Dela Cruz', 'email' => 'Ana@Gmail.com', 'contact_no' => '0919 765 4321',
+            'barangay' => 'Zone II Poblacion', 'address_line' => '',
+        ], $headers)->assertOk()
+            ->assertJsonPath('user.name', 'Ana Dela Cruz')
+            ->assertJsonPath('user.email', 'ana@gmail.com')
+            ->assertJsonPath('user.resident.contact_no', '09197654321')
+            ->assertJsonPath('user.resident.address', 'Zone II Poblacion, Bulan, Sorsogon')
+            ->assertJsonPath('user.resident.qr_code', 'BBC-000001');
+        $this->putJson('/api/profile', ['name' => 'Ana', 'contact_no' => '09197654321', 'barangay' => 'Manila'], $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['barangay']);
+
+        // Profile picture.
+        $photo = 'data:image/jpeg;base64,' . base64_encode('fake-jpeg-bytes');
+        $this->postJson('/api/profile/photo', ['photo' => $photo], $headers)->assertOk()->assertJsonPath('user.resident.photo', $photo);
+        $this->postJson('/api/profile/photo', ['photo' => 'data:text/html;base64,PGI+'], $headers)->assertStatus(422);
+        $this->getJson('/api/me', $headers)->assertJsonPath('resident.photo', $photo);
+        $this->deleteJson('/api/profile/photo', [], $headers)->assertOk()->assertJsonPath('user.resident.photo', null);
+
+        // Change password: the current one is required.
+        $this->putJson('/api/profile/password', ['current_password' => 'wrong123', 'password' => 'newpass123', 'password_confirmation' => 'newpass123'], $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['current_password']);
+        $this->putJson('/api/profile/password', ['current_password' => 'secret123', 'password' => 'newpass123', 'password_confirmation' => 'newpass123'], $headers)
+            ->assertOk();
+        $this->postJson('/api/login', ['login' => 'ana@gmail.com', 'password' => 'newpass123'])->assertOk();
+
+        // Staff and admin don't use this page.
+        $this->getJson('/api/profile', $this->token(User::factory()->create()))->assertForbidden();
+    }
+
+    public function test_notifications_can_be_marked_as_read(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $a = $this->postJson('/api/register', [
+            'name' => 'Lito Garcia', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Gate', 'contact_no' => '09201234567',
+        ])->assertCreated();
+        $b = $this->postJson('/api/register', [
+            'name' => 'Rosa Garcia', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Gate', 'contact_no' => '09211234567',
+        ])->assertCreated();
+        $headersA = ['Authorization' => 'Bearer ' . $a->json('token')];
+        $headersB = ['Authorization' => 'Bearer ' . $b->json('token')];
+
+        // The administrator's SMS announcements are also saved as in-app notifications.
+        $this->postJson('/api/notifications/announce', ['message' => 'Free check-up on Friday.'], $this->token($admin))->assertOk();
+        $this->postJson('/api/notifications/announce', ['message' => 'Closed on Monday.'], $this->token($admin))->assertOk();
+
+        $list = $this->getJson('/api/notifications', $headersA)->assertOk()->assertJsonCount(2)->json();
+        $this->assertNull($list[0]['read_at']);
+        $this->getJson('/api/notifications/unread-count', $headersA)->assertJsonPath('unread', 2);
+
+        $this->postJson("/api/notifications/{$list[0]['notification_id']}/read", [], $headersA)->assertOk();
+        $this->getJson('/api/notifications/unread-count', $headersA)->assertJsonPath('unread', 1);
+
+        // Another resident's notification cannot be touched.
+        $this->postJson("/api/notifications/{$list[1]['notification_id']}/read", [], $headersB)->assertNotFound();
+
+        $this->postJson('/api/notifications/read-all', [], $headersA)->assertOk();
+        $this->getJson('/api/notifications/unread-count', $headersA)->assertJsonPath('unread', 0);
+        $this->getJson('/api/notifications/unread-count', $headersB)->assertJsonPath('unread', 2);
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];

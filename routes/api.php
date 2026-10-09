@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\MedicineController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\PasswordResetController;
+use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RequestController;
 use App\Http\Controllers\Api\ResidentController;
@@ -40,6 +41,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/requests', [RequestController::class, 'store']);
         Route::put('/requests/{medicineRequest}', [RequestController::class, 'update']);
         Route::post('/requests/{medicineRequest}/cancel', [RequestController::class, 'cancel']);
+
+        Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+        Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
+        Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
+
+        Route::get('/profile', [ProfileController::class, 'show']);
+        Route::put('/profile', [ProfileController::class, 'update']);
+        Route::put('/profile/password', [ProfileController::class, 'updatePassword']);
+        Route::post('/profile/photo', [ProfileController::class, 'updatePhoto']);
+        Route::delete('/profile/photo', [ProfileController::class, 'deletePhoto']);
     });
 
     // ---- Administrator + Pharmacy staff

@@ -25,6 +25,37 @@ class NotificationController extends Controller
             ->get();
     }
 
+    /** Resident: number of unread notifications (red badge on the bell icon). */
+    public function unreadCount(Request $request)
+    {
+        return ['unread' => $this->own($request)->whereNull('read_at')->count()];
+    }
+
+    /** Resident: mark one notification as read. */
+    public function markRead(Request $request, Notification $notification)
+    {
+        abort_unless((int) $notification->resident_id === (int) $request->user()->resident?->resident_id, 404);
+
+        if (! $notification->read_at) {
+            $notification->update(['read_at' => now()]);
+        }
+
+        return $notification;
+    }
+
+    /** Resident: mark all of their notifications as read. */
+    public function markAllRead(Request $request)
+    {
+        $this->own($request)->whereNull('read_at')->update(['read_at' => now()]);
+
+        return ['unread' => 0];
+    }
+
+    private function own(Request $request)
+    {
+        return Notification::where('resident_id', $request->user()->resident?->resident_id);
+    }
+
     /** Admin: Send SMS alerts / announcements to residents (all, or selected ones). */
     public function announce(Request $request)
     {

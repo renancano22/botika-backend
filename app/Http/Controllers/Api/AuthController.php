@@ -37,8 +37,7 @@ class AuthController extends Controller
         ]);
 
         // Stored as e.g. "Purok 3, Zone I Poblacion, Bulan, Sorsogon".
-        $data['address'] = collect([trim((string) ($data['address_line'] ?? '')), $data['barangay'], 'Bulan, Sorsogon'])
-            ->filter()->implode(', ');
+        $data['address'] = Resident::composeAddress($data['address_line'] ?? null, $data['barangay']);
 
         $user = DB::transaction(function () use ($data) {
             $user = User::create([
@@ -87,13 +86,21 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $user->createToken('web')->plainTextToken,
-            'user' => $user->load('resident'),
+            'user' => self::withPhoto($user),
         ]);
     }
 
     public function me(Request $request)
     {
-        return $request->user()->load('resident');
+        return self::withPhoto($request->user());
+    }
+
+    /** The logged-in user, including the resident's profile picture (shown in the top bar). */
+    public static function withPhoto(User $user): User
+    {
+        $user->load('resident');
+        $user->resident?->makeVisible('photo');
+        return $user;
     }
 
     public function logout(Request $request)
