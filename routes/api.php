@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RequestController;
 use App\Http\Controllers\Api\ResidentController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Middleware\ExpireUnclaimedRequests;
 use Illuminate\Support\Facades\Route;
 
 // ---- Public: resident registration and login
@@ -22,7 +23,7 @@ Route::post('/forgot-password', [PasswordResetController::class, 'sendCode'])->m
 Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 Route::get('/barangays', fn () => config('botika.barangays'));
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(function () {
 
     // ---- All roles
     Route::middleware('role:admin,staff,resident')->group(function () {

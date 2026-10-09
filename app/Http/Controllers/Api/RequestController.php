@@ -20,13 +20,19 @@ use Illuminate\Validation\ValidationException;
  */
 class RequestController extends Controller
 {
+    /** Everything the request status tracker shows (who reviewed, dispensed or cancelled it, and when). */
+    private const DETAILS = [
+        'items.medicine:medicine_id,medicine_name,unit', 'resident', 'reviewer:user_id,name', 'canceller:user_id,name',
+        'dispensing:dispensing_id,request_id,dispensed_by,dispensed_at', 'dispensing.dispenser:user_id,name',
+    ];
+
     public function __construct(private InventoryService $inventory, private SmsService $sms) {}
 
     public function index(Request $request)
     {
         $user = $request->user();
 
-        return MedicineRequest::with(['items.medicine:medicine_id,medicine_name,unit', 'resident', 'reviewer:user_id,name'])
+        return MedicineRequest::with(self::DETAILS)
             ->when($user->role === User::ROLE_RESIDENT, fn ($q) => $q->where('resident_id', $user->resident?->resident_id))
             ->when($request->type, fn ($q, $t) => $q->where('request_type', $t))
             ->when($request->status, fn ($q, $s) => $q->where('status', $s))
@@ -73,12 +79,29 @@ class RequestController extends Controller
         return $medicineRequest->load('items.medicine');
     }
 
+    /**
+     * Resident: cancel their own request while it is pending, or approved but not yet claimed.
+     * Cancelling an approved medicine request gives its set-aside medicine back to the stock.
+     */
     public function cancel(Request $request, MedicineRequest $medicineRequest)
     {
-        $this->authorizeOwnPending($request, $medicineRequest);
-        $medicineRequest->update(['status' => 'cancelled']);
+        abort_unless((int) $medicineRequest->resident_id === (int) $request->user()->resident?->resident_id, 403, 'This is not your request.');
+        abort_unless(in_array($medicineRequest->status, ['pending', 'approved'], true), 422,
+            'Only pending or approved (not yet claimed) requests can be cancelled.');
 
-        return $medicineRequest;
+        $wasReserved = $medicineRequest->status === 'approved' && $medicineRequest->request_type === 'medicine';
+
+        $medicineRequest->update([
+            'status' => 'cancelled',
+            'cancelled_at' => now(),
+            'cancelled_by' => $request->user()->user_id,
+        ]);
+
+        if ($wasReserved) {
+            $this->inventory->releaseReserved($medicineRequest->items()->pluck('medicine_id'));
+        }
+
+        return $medicineRequest->fresh(self::DETAILS);
     }
 
     public function approve(Request $request, MedicineRequest $medicineRequest)
@@ -88,8 +111,10 @@ class RequestController extends Controller
 
         if ($medicineRequest->request_type === 'medicine') {
             $this->checkAvailability('medicine', $medicineRequest->items->map->only(['medicine_id', 'quantity'])->all());
-            $message = "BulanBotikaCare: Your medicine request #{$medicineRequest->request_id} has been APPROVED. "
-                . "Please visit Botika ng Bayan Bulan and present your QR code / Patient ID ({$medicineRequest->resident->qr_code}).";
+            $claimBy = now()->addDays(config('botika.unclaimed_days'))->format('M j, Y');
+            // Kept short so it fits in one SMS (160 characters).
+            $message = "BulanBotikaCare: Request #{$medicineRequest->request_id} APPROVED. Claim it at Botika ng Bayan Bulan "
+                . "with your QR/Patient ID {$medicineRequest->resident->qr_code} on or before {$claimBy}.";
         } else {
             $message = "BulanBotikaCare: Your restock request #{$medicineRequest->request_id} has been approved. "
                 . 'We will send you an SMS once the medicine is available.';
@@ -110,7 +135,7 @@ class RequestController extends Controller
             }
         }
 
-        return $medicineRequest->fresh(['items.medicine', 'resident', 'reviewer:user_id,name']);
+        return $medicineRequest->fresh(self::DETAILS);
     }
 
     public function reject(Request $request, MedicineRequest $medicineRequest)
@@ -132,7 +157,7 @@ class RequestController extends Controller
             $medicineRequest->request_id
         );
 
-        return $medicineRequest->fresh(['items.medicine', 'resident', 'reviewer:user_id,name']);
+        return $medicineRequest->fresh(self::DETAILS);
     }
 
     // ---------------------------------------------------------------- helpers

@@ -5,6 +5,9 @@ return [
     'expiry_warning_days' => (int) env('BOTIKA_EXPIRY_WARNING_DAYS', 30),
     // Number of past complete months used by the demand forecasting module.
     'forecast_history_months' => (int) env('BOTIKA_FORECAST_HISTORY_MONTHS', 12),
+    // Approved medicine requests not claimed within this many days are cancelled automatically,
+    // so the medicine set aside for them goes back to the available stock.
+    'unclaimed_days' => (int) env('BOTIKA_UNCLAIMED_DAYS', 7),
 
     // The 63 barangays of Bulan, Sorsogon (source: PhilAtlas / PSGC). Used for the address dropdown.
     'barangays' => [

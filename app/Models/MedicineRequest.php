@@ -14,8 +14,10 @@ class MedicineRequest extends Model
     protected $primaryKey = 'request_id';
     public $timestamps = false;
 
-    protected $fillable = ['resident_id', 'request_type', 'request_date', 'status', 'reviewed_by', 'reviewed_at', 'remarks'];
-    protected $casts = ['request_date' => 'datetime', 'reviewed_at' => 'datetime'];
+    protected $fillable = ['resident_id', 'request_type', 'request_date', 'status', 'reviewed_by', 'reviewed_at', 'remarks',
+        'cancelled_at', 'cancelled_by', 'fulfilled_at'];
+    protected $casts = ['request_date' => 'datetime', 'reviewed_at' => 'datetime', 'cancelled_at' => 'datetime', 'fulfilled_at' => 'datetime'];
+    protected $appends = ['claim_by'];
 
     public function resident(): BelongsTo
     {
@@ -25,6 +27,20 @@ class MedicineRequest extends Model
     public function reviewer(): BelongsTo
     {
         return $this->belongsTo(User::class, 'reviewed_by', 'user_id');
+    }
+
+    public function canceller(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancelled_by', 'user_id');
+    }
+
+    /** Last day to claim an approved medicine request before it is cancelled automatically. */
+    public function getClaimByAttribute(): ?string
+    {
+        if ($this->request_type !== 'medicine' || $this->status !== 'approved' || ! $this->reviewed_at) {
+            return null;
+        }
+        return $this->reviewed_at->copy()->addDays(config('botika.unclaimed_days'))->toIso8601String();
     }
 
     public function items(): HasMany

@@ -311,6 +311,59 @@ class BotikaFlowTest extends TestCase
         $this->getJson('/api/notifications/unread-count', $headersB)->assertJsonPath('unread', 2);
     }
 
+    public function test_resident_cancels_approved_request_and_unclaimed_requests_expire(): void
+    {
+        $staff = User::factory()->create();
+        $admin = User::factory()->admin()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Metformin 500mg', 'category' => 'Antidiabetic', 'unit' => 'tablet', 'reorder_level' => 2]);
+        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $medicine->medicine_id, 'quantity' => 10, 'expiration_date' => now()->addYears(2)->toDateString()], $this->token($staff))
+            ->assertCreated();
+
+        $register = fn (string $name, string $phone) => $this->postJson('/api/register', [
+            'name' => $name, 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Gate', 'contact_no' => $phone,
+        ])->assertCreated();
+        $a = $register('Resident A', '09220000001');
+        $b = $register('Resident B', '09220000002');
+        $headersA = ['Authorization' => 'Bearer ' . $a->json('token')];
+        $headersB = ['Authorization' => 'Bearer ' . $b->json('token')];
+        $item = fn (int $qty) => ['items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => $qty]]];
+
+        // A's approved request sets aside 8; B asks for a restock of 5 (only 2 are free) and the admin approves it.
+        $requestA = $this->postJson('/api/requests', ['request_type' => 'medicine', ...$item(8)], $headersA)->assertCreated()->json('request_id');
+        $approved = $this->postJson("/api/requests/{$requestA}/approve", [], $this->token($staff))->assertOk();
+        $this->assertNotNull($approved->json('claim_by'));
+        $restockB = $this->postJson('/api/requests', ['request_type' => 'restock', ...$item(5)], $headersB)->assertCreated()->json('request_id');
+        $this->postJson("/api/requests/{$restockB}/approve", [], $this->token($admin))->assertOk()->assertJsonPath('status', 'approved');
+
+        // Only the owner can cancel; an approved (not yet claimed) request can be cancelled.
+        $this->postJson("/api/requests/{$requestA}/cancel", [], $headersB)->assertForbidden();
+        $this->postJson("/api/requests/{$requestA}/cancel", [], $headersA)->assertOk()
+            ->assertJsonPath('status', 'cancelled')
+            ->assertJsonPath('canceller.name', 'Resident A');
+        $this->postJson("/api/requests/{$requestA}/cancel", [], $headersA)->assertStatus(422);
+
+        // The 8 set aside go back to the stock, so B's restock request is now fulfilled.
+        $this->getJson('/api/medicines', $this->token($staff))->assertJsonPath('0.free_stock', 10);
+        $this->assertDatabaseHas('requests', ['request_id' => $restockB, 'status' => 'fulfilled']);
+        $this->assertNotNull(\App\Models\MedicineRequest::find($restockB)->fulfilled_at);
+
+        // B's approved request is not claimed within the allowed days, so it is cancelled automatically.
+        $requestB = $this->postJson('/api/requests', ['request_type' => 'medicine', ...$item(6)], $headersB)->assertCreated()->json('request_id');
+        $this->postJson("/api/requests/{$requestB}/approve", [], $this->token($staff))->assertOk();
+
+        $this->travel(config('botika.unclaimed_days') + 1)->days();
+        // Logins expire after 12 hours, so resident B logs in again.
+        $headersB = $this->token(User::where('name', 'Resident B')->first());
+        $list = $this->getJson('/api/requests', $headersB)->assertOk()->json();
+        $expired = collect($list)->firstWhere('request_id', $requestB);
+        $this->assertSame('cancelled', $expired['status']);
+        $this->assertNull($expired['cancelled_by']);
+        $this->assertNotNull($expired['cancelled_at']);
+        $this->assertDatabaseHas('notifications', ['request_id' => $requestB, 'message' => "BulanBotikaCare: Your medicine request #{$requestB} was cancelled because it was not claimed within 7 days of approval. You may submit a new request anytime."]);
+        $this->getJson('/api/medicines', $this->token($staff))->assertJsonPath('0.free_stock', 10);
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];

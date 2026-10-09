@@ -181,13 +181,49 @@ class InventoryService
             $allAvailable = $req->items->every(fn ($item) => $this->freeStock($item->medicine_id) >= $item->quantity);
             if (! $allAvailable) continue;
 
-            $req->update(['status' => 'fulfilled']);
+            $req->update(['status' => 'fulfilled', 'fulfilled_at' => now()]);
             $names = $req->items->map(fn ($i) => $i->medicine->medicine_name)->implode(', ');
             $this->sms->notify(
                 $req->resident,
                 "BulanBotikaCare: Good news! {$names} is now available at Botika ng Bayan Bulan. You may now submit a medicine request.",
                 $req->request_id
             );
+        }
+    }
+
+    /**
+     * Cancels approved medicine requests that were not claimed within the allowed days
+     * (config botika.unclaimed_days). Their set-aside medicine goes back to the available stock,
+     * the resident gets an SMS, and waiting restock requests are checked again.
+     */
+    public function expireUnclaimedRequests(): int
+    {
+        $days = config('botika.unclaimed_days');
+        $expired = MedicineRequest::with(['items.medicine', 'resident'])
+            ->where('request_type', 'medicine')
+            ->where('status', 'approved')
+            ->where('reviewed_at', '<', now()->subDays($days))
+            ->get();
+
+        foreach ($expired as $req) {
+            $req->update(['status' => 'cancelled', 'cancelled_at' => now(), 'cancelled_by' => null]);
+            $this->sms->notify(
+                $req->resident,
+                "BulanBotikaCare: Your medicine request #{$req->request_id} was cancelled because it was not claimed within {$days} days of approval. You may submit a new request anytime.",
+                $req->request_id
+            );
+        }
+
+        $this->releaseReserved($expired->flatMap(fn ($r) => $r->items->pluck('medicine_id')));
+
+        return $expired->count();
+    }
+
+    /** After set-aside stock is released, waiting restock requests for those medicines may now be fulfilled. */
+    public function releaseReserved(iterable $medicineIds): void
+    {
+        foreach (collect($medicineIds)->unique() as $medicineId) {
+            $this->fulfillRestockRequests((int) $medicineId);
         }
     }
 }
