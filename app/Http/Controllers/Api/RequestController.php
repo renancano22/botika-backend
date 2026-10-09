@@ -21,7 +21,7 @@ use Illuminate\Validation\ValidationException;
 class RequestController extends Controller
 {
     /** Everything the request status tracker shows (who reviewed, dispensed or cancelled it, and when). */
-    private const DETAILS = [
+    public const DETAILS = [
         'items.medicine:medicine_id,medicine_name,unit', 'resident', 'reviewer:user_id,name', 'canceller:user_id,name',
         'dispensing:dispensing_id,request_id,dispensed_by,dispensed_at', 'dispensing.dispenser:user_id,name',
     ];

@@ -300,8 +300,12 @@ class BotikaFlowTest extends TestCase
         $this->assertNull($list[0]['read_at']);
         $this->getJson('/api/notifications/unread-count', $headersA)->assertJsonPath('unread', 2);
 
-        $this->postJson("/api/notifications/{$list[0]['notification_id']}/read", [], $headersA)->assertOk();
+        // Opening a notification shows it and marks it as read.
+        $this->getJson("/api/notifications/{$list[0]['notification_id']}", $headersA)->assertOk()
+            ->assertJsonPath('notification.notification_id', $list[0]['notification_id'])
+            ->assertJsonPath('request', null);
         $this->getJson('/api/notifications/unread-count', $headersA)->assertJsonPath('unread', 1);
+        $this->getJson("/api/notifications/{$list[0]['notification_id']}", $headersB)->assertNotFound();
 
         // Another resident's notification cannot be touched.
         $this->postJson("/api/notifications/{$list[1]['notification_id']}/read", [], $headersB)->assertNotFound();

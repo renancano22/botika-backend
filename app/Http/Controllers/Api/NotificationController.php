@@ -31,6 +31,23 @@ class NotificationController extends Controller
         return ['unread' => $this->own($request)->whereNull('read_at')->count()];
     }
 
+    /** Resident: open one notification (marks it as read) with the request it is about. */
+    public function show(Request $request, Notification $notification)
+    {
+        abort_unless((int) $notification->resident_id === (int) $request->user()->resident?->resident_id, 404);
+
+        if (! $notification->read_at) {
+            $notification->update(['read_at' => now()]);
+        }
+
+        return [
+            'notification' => $notification,
+            'request' => $notification->request_id
+                ? \App\Models\MedicineRequest::with(RequestController::DETAILS)->find($notification->request_id)
+                : null,
+        ];
+    }
+
     /** Resident: mark one notification as read. */
     public function markRead(Request $request, Notification $notification)
     {

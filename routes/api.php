@@ -47,6 +47,7 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
         Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
         Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
+        Route::get('/notifications/{notification}', [NotificationController::class, 'show'])->whereNumber('notification');
 
         Route::get('/profile', [ProfileController::class, 'show']);
         Route::put('/profile', [ProfileController::class, 'update']);
