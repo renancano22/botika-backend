@@ -150,20 +150,38 @@ class ForecastService
         return $keys;
     }
 
-    /** First day of the oldest month of records used (the current, incomplete month is not used). */
+    /**
+     * First day of the oldest month of records used. The last $months months include the current
+     * month (counted so far), so medicines dispensed this month already show and are used.
+     */
     private static function historyStart(int $months): Carbon
     {
-        return now()->startOfMonth()->subMonthsNoOverflow($months);
+        return now()->startOfMonth()->subMonthsNoOverflow(max(1, $months) - 1);
+    }
+
+    /** The forecast starts with next month. */
+    private static function forecastStart(): Carbon
+    {
+        return now()->startOfMonth()->addMonthNoOverflow();
+    }
+
+    /** Month of the very first dispensing record in the system ('2026-10'), or null when there is none yet. */
+    public static function firstRecordMonth(): ?string
+    {
+        $first = DispensingItem::query()
+            ->join('dispensing', 'dispensing.dispensing_id', '=', 'dispensing_items.dispensing_id')
+            ->min('dispensing.dispensed_at');
+        return $first ? Carbon::parse($first)->format('Y-m') : null;
     }
 
     /**
-     * Monthly dispensed quantities of each medicine for the past $months complete months, oldest first,
+     * Monthly dispensed quantities of each medicine for the last $months months (up to this month), oldest first,
      * read with one query: [medicine_id => ['2026-01' => 40, ...]].
      */
     public function monthlyHistories(int $months, ?array $medicineIds = null): array
     {
         $start = self::historyStart($months);
-        $end = now()->startOfMonth();
+        $end = self::forecastStart();
         $empty = array_fill_keys(self::monthKeys($start, $months), 0);
 
         $rows = DispensingItem::query()
@@ -246,8 +264,14 @@ class ForecastService
     private function compute(int $months, int $horizon, ?array $medicineIds = null): array
     {
         $historyKeys = self::monthKeys(self::historyStart($months), $months);
-        $forecastKeys = self::monthKeys(now()->startOfMonth(), $horizon);
+        $forecastKeys = self::monthKeys(self::forecastStart(), $horizon);
         $histories = $this->monthlyHistories($months, $medicineIds);
+
+        // Months before the system's first dispensing record are "no data yet", not "zero demand",
+        // so the methods only learn from the months since records began.
+        $first = self::firstRecordMonth();
+        $dataStart = $first === null ? null : max($first, $historyKeys[0]);
+        $offset = $dataStart === null ? count($historyKeys) : (int) array_search($dataStart, $historyKeys, true);
 
         $medicines = Medicine::withAvailableStock()
             ->when($medicineIds !== null, fn ($q) => $q->whereIn('medicine_id', $medicineIds))
@@ -258,7 +282,7 @@ class ForecastService
         $rows = [];
         foreach ($medicines as $m) {
             $history = $histories['by_medicine'][$m->medicine_id] ?? $histories['empty'];
-            $series = array_values($history);
+            $series = array_slice(array_values($history), $offset);
 
             $methods = [];
             foreach (self::METHODS as $method) {
@@ -279,7 +303,7 @@ class ForecastService
                 'medicine_name' => $m->medicine_name,
                 'category' => $m->category,
                 'unit' => $m->unit,
-                'forecast_date' => now()->startOfMonth()->toDateString(), // first month being forecast
+                'forecast_date' => self::forecastStart()->toDateString(), // first month being forecast
                 'history' => $history,
                 'methods' => $methods,
                 'best_method' => $best,
@@ -291,7 +315,10 @@ class ForecastService
         $count = max(1, count($rows));
         $methodError = array_map(fn ($sum) => $sum === null ? null : round($sum / $count, 2), $errorSum);
 
-        return ['history_keys' => $historyKeys, 'forecast_keys' => $forecastKeys, 'rows' => $rows, 'method_error' => $methodError];
+        return [
+            'history_keys' => $historyKeys, 'forecast_keys' => $forecastKeys, 'rows' => $rows, 'method_error' => $methodError,
+            'data_start' => $dataStart, 'months_with_data' => count($historyKeys) - $offset,
+        ];
     }
 
     /** The method with the lowest average back-tested error (moving average when there is not enough data). */
@@ -340,6 +367,10 @@ class ForecastService
             'method_error' => $data['method_error'],
             'history_keys' => $data['history_keys'],
             'forecast_keys' => $data['forecast_keys'],
+            'current_month' => now()->format('Y-m'),
+            // first month with dispensing records (null = none yet) and how many months the methods learned from
+            'data_start' => $data['data_start'],
+            'months_with_data' => $data['months_with_data'],
             'summary' => [
                 'medicines_analyzed' => count($results),
                 'potential_stockouts' => count(array_filter($results, fn ($r) => $r['priority'] === 'high')),

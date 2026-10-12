@@ -166,10 +166,10 @@ class RequestController extends Controller
 
         if ($medicineRequest->request_type === 'medicine') {
             $this->checkAvailability('medicine', $medicineRequest->items->map->only(['medicine_id', 'quantity'])->all());
-            $claimBy = now()->addDays(config('botika.unclaimed_days'))->format('M j, Y');
+            $claimBy = MedicineRequest::claimDeadline(now())->format('F j, Y');
             // Kept short so it fits in one SMS (160 characters).
             $message = "BulanBotikaCare: Request #{$medicineRequest->request_id} APPROVED. Claim it at Botika ng Bayan Bulan "
-                . "with your QR/Patient ID {$medicineRequest->resident->qr_code} on or before {$claimBy}.";
+                . "on or before {$claimBy} or it will be cancelled. Bring QR/ID {$medicineRequest->resident->qr_code}.";
         } else {
             $message = "BulanBotikaCare: Your restock request #{$medicineRequest->request_id} has been approved. "
                 . 'We will send you an SMS once the medicine is available.';

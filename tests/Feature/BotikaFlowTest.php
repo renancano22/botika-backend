@@ -499,9 +499,13 @@ class BotikaFlowTest extends TestCase
         $maria = \App\Models\Resident::where('qr_code', $qr1)->firstOrFail();
         $jose = \App\Models\Resident::where('qr_code', $qr2)->firstOrFail();
 
-        // 10 tablets of paracetamol dispensed to Maria in each of the past 6 months.
-        for ($k = 1; $k <= 6; $k++) {
-            $date = now()->startOfMonth()->subMonthsNoOverflow($k)->addDays(5);
+        // No records yet: nothing to learn from, everything is 0.
+        $this->getJson('/api/forecasts?months=6', $this->token($admin))->assertOk()
+            ->assertJsonPath('data_start', null)->assertJsonPath('months_with_data', 0);
+
+        // 10 tablets of paracetamol dispensed to Maria in each of the last 6 months (this month included).
+        for ($k = 0; $k <= 5; $k++) {
+            $date = now()->startOfMonth()->subMonthsNoOverflow($k);
             $req = \App\Models\MedicineRequest::create(['resident_id' => $maria->resident_id, 'request_type' => 'medicine', 'status' => 'dispensed', 'request_date' => $date, 'reviewed_at' => $date]);
             $req->items()->create(['medicine_id' => $para->medicine_id, 'quantity' => 10]);
             $d = \App\Models\Dispensing::create(['request_id' => $req->request_id, 'dispensed_by' => $staff->user_id, 'dispensed_at' => $date]);
@@ -518,7 +522,10 @@ class BotikaFlowTest extends TestCase
             ->assertJsonPath('method', 'moving_average')
             ->assertJsonCount(6, 'history_keys')
             ->assertJsonCount(3, 'forecast_keys')
-            ->assertJsonPath('forecast_keys.0', now()->format('Y-m'))
+            ->assertJsonPath('forecast_keys.0', now()->startOfMonth()->addMonthNoOverflow()->format('Y-m'))
+            ->assertJsonPath('history_keys.5', now()->format('Y-m'))
+            ->assertJsonPath('data_start', now()->startOfMonth()->subMonthsNoOverflow(5)->format('Y-m'))
+            ->assertJsonPath('months_with_data', 6)
             ->assertJsonPath('summary.medicines_analyzed', 2)
             ->assertJsonPath('summary.potential_stockouts', 1)
             ->assertJsonPath('summary.restock_recommendations', 1)
@@ -535,7 +542,12 @@ class BotikaFlowTest extends TestCase
         $this->assertSame(25, $p['recommended_restock']);         // 30 + reorder level 5 - 10 in stock
         $this->assertSame('high', $p['priority']);                // stock runs out within the period
         $this->assertCount(3, $p['forecast']);
-        $this->assertEqualsWithDelta(10, $p['history'][now()->startOfMonth()->subMonth()->format('Y-m')], 0.001);
+        $this->assertEqualsWithDelta(10, $p['history'][now()->format('Y-m')], 0.001); // this month counts too
+
+        // A longer window does not treat the months before the first record as "zero demand".
+        $long = collect($this->getJson('/api/forecasts?months=12&horizon=3&method=linear_regression', $this->token($admin))
+            ->assertOk()->assertJsonPath('months_with_data', 6)->json('results'))->keyBy('medicine_name');
+        $this->assertSame(30, $long['Paracetamol 500mg']['predicted_demand']);
         $c = $rows['Cetirizine 10mg'];
         $this->assertSame(0, $c['recommended_restock']);
         $this->assertNull($c['priority']);

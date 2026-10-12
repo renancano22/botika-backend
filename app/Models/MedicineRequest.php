@@ -57,7 +57,16 @@ class MedicineRequest extends Model
         if ($this->request_type !== 'medicine' || $this->status !== 'approved' || ! $this->reviewed_at) {
             return null;
         }
-        return $this->reviewed_at->copy()->addDays(config('botika.unclaimed_days'))->toIso8601String();
+        return self::claimDeadline($this->reviewed_at)->toIso8601String();
+    }
+
+    /**
+     * Pickup deadline of an approved medicine request: the end of the day, botika.unclaimed_days
+     * after approval (approved Oct 12 → claim on or before Oct 19). After that it is cancelled (expired).
+     */
+    public static function claimDeadline(\DateTimeInterface $approvedAt): \Carbon\Carbon
+    {
+        return \Carbon\Carbon::instance($approvedAt)->copy()->addDays(config('botika.unclaimed_days'))->endOfDay();
     }
 
     public function items(): HasMany

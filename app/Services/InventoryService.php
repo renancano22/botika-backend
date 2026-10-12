@@ -203,9 +203,10 @@ class InventoryService
 
     /**
      * Pickup deadline rules for approved medicine requests (config botika.unclaimed_days):
+     * - the deadline is the end of the day, unclaimed_days after approval (approved Oct 12 → Oct 19);
      * - one day before the deadline, the resident gets a reminder (SMS + in-app, sent once);
-     * - when the deadline passes without collection, the request becomes "expired", its
-     *   set-aside medicine goes back to the stock and the resident is notified.
+     * - when the deadline passes without collection, the request is cancelled automatically
+     *   (status "expired"), its set-aside medicine goes back to the stock and the resident is notified.
      * @return array{reminded: int, expired: int}
      */
     public function checkPickupDeadlines(): array
@@ -215,15 +216,15 @@ class InventoryService
         $expired = MedicineRequest::with(['items.medicine', 'resident'])
             ->where('request_type', 'medicine')
             ->where('status', 'approved')
-            ->where('reviewed_at', '<', now()->subDays($days))
+            ->where('reviewed_at', '<', now()->subDays($days)->startOfDay()) // deadline day is over
             ->get();
 
         foreach ($expired as $req) {
-            $deadline = $req->reviewed_at->copy()->addDays($days)->format('M j, Y');
+            $deadline = MedicineRequest::claimDeadline($req->reviewed_at)->format('F j, Y');
             $req->update(['status' => 'expired', 'cancelled_at' => now(), 'cancelled_by' => null]);
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Request #{$req->request_id} has EXPIRED. The pickup deadline ({$deadline}) passed. Please submit a new request if you still need the medicine.",
+                "BulanBotikaCare: Request #{$req->request_id} was CANCELLED because it was not claimed by {$deadline}. Please submit a new request if you still need the medicine.",
                 $req->request_id,
                 'expired'
             );
@@ -234,15 +235,15 @@ class InventoryService
             ->where('request_type', 'medicine')
             ->where('status', 'approved')
             ->whereNull('reminded_at')
-            ->where('reviewed_at', '<=', now()->subDays(max(0, $days - 1)))
+            ->where('reviewed_at', '<=', now()->subDays(max(0, $days - 1))->endOfDay()) // from the day before the deadline
             ->get();
 
         foreach ($dueSoon as $req) {
-            $deadline = $req->reviewed_at->copy()->addDays($days)->format('M j, Y');
+            $deadline = MedicineRequest::claimDeadline($req->reviewed_at)->format('F j, Y');
             $req->update(['reminded_at' => now()]);
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Reminder: please claim your medicines for request #{$req->request_id} at Botika ng Bayan Bulan on or before {$deadline}, or the request will expire.",
+                "BulanBotikaCare: Reminder: claim your medicines for request #{$req->request_id} at Botika ng Bayan Bulan on or before {$deadline} or it will be cancelled.",
                 $req->request_id,
                 'reminder'
             );
