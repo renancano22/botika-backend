@@ -15,6 +15,15 @@ class InventoryService
 {
     public function __construct(private SmsService $sms) {}
 
+    /**
+     * Batches expiring on or before this date are "near expiry": admin and staff are warned
+     * 1 month before the expiration date (config botika.expiry_warning_months).
+     */
+    public static function nearExpiryCutoff(): string
+    {
+        return now()->addMonthsNoOverflow(config('botika.expiry_warning_months', 1))->toDateString();
+    }
+
     /** Quantity in batches that have not expired (physically on the shelf). */
     public function availableStock(int $medicineId): int
     {
@@ -132,7 +141,7 @@ class InventoryService
     public function alerts(): array
     {
         $today = now()->toDateString();
-        $warnUntil = now()->addDays(config('botika.expiry_warning_days', 30))->toDateString();
+        $warnUntil = self::nearExpiryCutoff();
 
         $lowStock = Medicine::withAvailableStock()->get()
             ->map(function (Medicine $m) {

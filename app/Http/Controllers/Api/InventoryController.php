@@ -17,7 +17,7 @@ class InventoryController extends Controller
     public function index(Request $request)
     {
         $today = now()->toDateString();
-        $warnUntil = now()->addDays(config('botika.expiry_warning_days', 30))->toDateString();
+        $warnUntil = InventoryService::nearExpiryCutoff();
 
         return Inventory::with('medicine:medicine_id,medicine_name,category,unit')
             ->when($request->medicine_id, fn ($q, $id) => $q->where('medicine_id', $id))

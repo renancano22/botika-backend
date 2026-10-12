@@ -96,7 +96,7 @@ class ReportController extends Controller
     private function inventoryStatus(): array
     {
         $today = now()->toDateString();
-        $warnUntil = now()->addDays(config('botika.expiry_warning_days', 30))->toDateString();
+        $warnUntil = InventoryService::nearExpiryCutoff();
 
         return Medicine::with(['inventory' => fn ($q) => $q->where('quantity', '>', 0)])
             ->orderBy('medicine_name')->get()

@@ -392,6 +392,29 @@ class BotikaFlowTest extends TestCase
         $this->getJson('/api/medicines', $this->token($staff))->assertJsonPath('0.free_stock', 10);
     }
 
+    public function test_admin_and_staff_are_warned_one_month_before_expiry(): void
+    {
+        $staff = User::factory()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Cefalexin 500mg', 'category' => 'Antibiotic', 'unit' => 'capsule', 'reorder_level' => 0]);
+        $soon = Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 20, 'expiration_date' => now()->addMonthNoOverflow()->toDateString()]);
+        $later = Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 30, 'expiration_date' => now()->addMonthNoOverflow()->addDays(2)->toDateString()]);
+
+        $alerts = $this->getJson('/api/inventory/alerts', $this->token($staff))->assertOk()->json();
+        $this->assertSame([$soon->inventory_id], collect($alerts['near_expiry'])->pluck('inventory_id')->all());
+
+        $this->getJson('/api/inventory', $this->token($staff))->assertOk()
+            ->assertJsonPath('0.expiry_status', 'near_expiry')
+            ->assertJsonPath('1.expiry_status', 'ok');
+        $this->assertSame($later->inventory_id, $this->getJson('/api/inventory', $this->token($staff))->json('1.inventory_id'));
+
+        // Residents cannot see the stock alerts.
+        $resident = $this->postJson('/api/register', [
+            'name' => 'Luz Bautista', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Gate', 'contact_no' => '09230000001',
+        ])->assertCreated();
+        $this->getJson('/api/inventory/alerts', ['Authorization' => 'Bearer ' . $resident->json('token')])->assertForbidden();
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];
