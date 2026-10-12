@@ -49,6 +49,14 @@ class DashboardController extends Controller
             'alerts' => $alerts,
             'recent_requests' => MedicineRequest::with(['items.medicine:medicine_id,medicine_name', 'resident:resident_id,name'])
                 ->where('status', 'pending')->orderBy('request_date')->limit(8)->get(),
+            // Approved medicine requests waiting to be claimed: whose they are and until when (oldest deadline first).
+            'ready_for_pickup' => MedicineRequest::with([
+                'items.medicine:medicine_id,medicine_name,unit',
+                'resident:resident_id,name,qr_code,contact_no',
+                'reviewer:user_id,name',
+            ])
+                ->where('request_type', 'medicine')->where('status', 'approved')
+                ->orderBy('reviewed_at')->limit(10)->get(),
             'monthly_dispensing' => $this->monthlyDispensing(),
         ];
 

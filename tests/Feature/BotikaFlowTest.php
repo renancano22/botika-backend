@@ -463,6 +463,36 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/dispensing/walk-in', ['qr_code' => $qr, 'prescription_checked' => true, 'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 2]]], $this->token($staff))->assertCreated();
     }
 
+    public function test_approved_requests_are_listed_for_pickup_with_counts(): void
+    {
+        $staff = User::factory()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
+        Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 50, 'expiration_date' => now()->addYear()->toDateString()]);
+        $reg = $this->postJson('/api/register', [
+            'name' => 'Maria Santos', 'email' => 'maria@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09171234567',
+        ])->assertCreated();
+        $headers = ['Authorization' => 'Bearer ' . $reg->json('token')];
+
+        $first = $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 2]]], $headers)->json('request_id');
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 3]]], $headers)->assertCreated();
+        $this->postJson("/api/requests/{$first}/approve", [], $this->token($staff))->assertOk();
+
+        $this->getJson('/api/requests/counts?type=medicine', $headers)->assertForbidden(); // residents cannot
+        $this->getJson('/api/requests/counts?type=medicine', $this->token($staff))->assertOk()
+            ->assertJsonPath('pending', 1)->assertJsonPath('approved', 1)->assertJsonPath('all', 2);
+
+        $this->getJson('/api/dashboard', $this->token($staff))->assertOk()
+            ->assertJsonCount(1, 'ready_for_pickup')
+            ->assertJsonPath('ready_for_pickup.0.request_id', $first)
+            ->assertJsonPath('ready_for_pickup.0.resident.name', 'Maria Santos')
+            ->assertJsonPath('ready_for_pickup.0.resident.contact_no', '09171234567')
+            ->assertJsonPath('ready_for_pickup.0.claim_by', \App\Models\MedicineRequest::claimDeadline(now())->toIso8601String());
+
+        // The request details route still works next to /requests/counts.
+        $this->getJson("/api/requests/{$first}", $this->token($staff))->assertOk()->assertJsonPath('status', 'approved');
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];

@@ -33,8 +33,8 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::get('/medicines', [MedicineController::class, 'index']);
         Route::get('/medicines/categories', [MedicineController::class, 'categories']);
         Route::get('/requests', [RequestController::class, 'index']);
-        Route::get('/requests/{medicineRequest}', [RequestController::class, 'show']);
-        Route::get('/requests/{medicineRequest}/prescription', [RequestController::class, 'showPrescription']);
+        Route::get('/requests/{medicineRequest}', [RequestController::class, 'show'])->whereNumber('medicineRequest');
+        Route::get('/requests/{medicineRequest}/prescription', [RequestController::class, 'showPrescription'])->whereNumber('medicineRequest');
         Route::get('/dispensing', [DispensingController::class, 'index']);
         Route::get('/notifications', [NotificationController::class, 'index']);
     });
@@ -69,6 +69,7 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::post('/inventory/stock-in', [InventoryController::class, 'stockIn']);
         Route::post('/inventory/{inventory}/stock-out', [InventoryController::class, 'stockOut']);
 
+        Route::get('/requests/counts', [RequestController::class, 'counts']);
         Route::post('/requests/{medicineRequest}/approve', [RequestController::class, 'approve']);
         Route::post('/requests/{medicineRequest}/reject', [RequestController::class, 'reject']);
 

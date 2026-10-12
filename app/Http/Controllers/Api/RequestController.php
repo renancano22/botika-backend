@@ -44,6 +44,19 @@ class RequestController extends Controller
             ->get();
     }
 
+    /** Staff/admin: number of requests in each status, e.g. {"pending": 3, "approved": 5, ...} (?type=medicine|restock). */
+    public function counts(Request $request)
+    {
+        $counts = MedicineRequest::query()
+            ->when($request->type, fn ($q, $t) => $q->where('request_type', $t))
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status')
+            ->map(fn ($n) => (int) $n);
+
+        return $counts->put('all', $counts->sum());
+    }
+
     /** One request with its full status history (residents can only open their own). */
     public function show(Request $request, MedicineRequest $medicineRequest)
     {
