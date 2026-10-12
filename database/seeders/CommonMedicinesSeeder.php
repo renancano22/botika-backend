@@ -49,6 +49,7 @@ class CommonMedicinesSeeder extends Seeder
                 'unit' => $unit,
                 'reorder_level' => $reorder,
                 'description' => $description,
+                'requires_prescription' => str_contains($description, 'Requires prescription'),
             ]);
             $added++;
         }

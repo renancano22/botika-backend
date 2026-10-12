@@ -11,8 +11,8 @@ class Medicine extends Model
     protected $primaryKey = 'medicine_id';
     const UPDATED_AT = null;
 
-    protected $fillable = ['medicine_name', 'category', 'unit', 'description', 'reorder_level'];
-    protected $casts = ['created_at' => 'datetime', 'reorder_level' => 'integer'];
+    protected $fillable = ['medicine_name', 'category', 'unit', 'description', 'requires_prescription', 'reorder_level'];
+    protected $casts = ['created_at' => 'datetime', 'reorder_level' => 'integer', 'requires_prescription' => 'boolean'];
 
     public function inventory(): HasMany
     {

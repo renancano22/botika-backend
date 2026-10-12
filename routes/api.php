@@ -34,6 +34,7 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::get('/medicines/categories', [MedicineController::class, 'categories']);
         Route::get('/requests', [RequestController::class, 'index']);
         Route::get('/requests/{medicineRequest}', [RequestController::class, 'show']);
+        Route::get('/requests/{medicineRequest}/prescription', [RequestController::class, 'showPrescription']);
         Route::get('/dispensing', [DispensingController::class, 'index']);
         Route::get('/notifications', [NotificationController::class, 'index']);
     });
@@ -43,6 +44,7 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::post('/requests', [RequestController::class, 'store']);
         Route::put('/requests/{medicineRequest}', [RequestController::class, 'update']);
         Route::post('/requests/{medicineRequest}/cancel', [RequestController::class, 'cancel']);
+        Route::post('/requests/{medicineRequest}/prescription', [RequestController::class, 'uploadPrescription']);
 
         Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
         Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);

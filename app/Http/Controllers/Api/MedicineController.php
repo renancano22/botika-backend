@@ -34,6 +34,7 @@ class MedicineController extends Controller
                 'category' => $m->category,
                 'unit' => $m->unit,
                 'description' => $m->description,
+                'requires_prescription' => (bool) $m->requires_prescription,
                 // Residents only see what they can still request (stock not reserved for approved requests).
                 'available_stock' => $isResident ? $free : $onShelf,
                 'status' => Medicine::stockStatus($isResident ? $free : $onShelf, $m->reorder_level),
@@ -86,6 +87,7 @@ class MedicineController extends Controller
             'category' => 'required|string|max:100',
             'unit' => 'required|string|max:50',
             'description' => 'nullable|string',
+            'requires_prescription' => 'boolean',
             'reorder_level' => 'required|integer|min:0',
         ]);
     }

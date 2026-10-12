@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Dispensing;
+use App\Models\Medicine;
 use App\Models\MedicineRequest;
 use App\Models\Resident;
 use App\Models\User;
@@ -54,8 +55,12 @@ class DispensingController extends Controller
         if ($req->request_type !== 'medicine' || $req->status !== 'approved') {
             return response()->json(['message' => 'Only approved medicine requests can be dispensed.'], 422);
         }
+        $rx = $req->prescriptionMedicines();
+        if ($rx->isNotEmpty() && ! $request->boolean('prescription_checked')) {
+            return response()->json(['message' => self::rxMessage($rx->implode(', '))], 422);
+        }
 
-        return response()->json($this->dispense($req, $request->user()), 201);
+        return response()->json($this->dispense($req, $request->user(), $rx->isNotEmpty()), 201);
     }
 
     /** Walk-in: staff verifies the resident's QR code and dispenses directly (recorded as a request too). */
@@ -70,6 +75,11 @@ class DispensingController extends Controller
 
         $resident = Resident::where('qr_code', $data['qr_code'])->firstOrFail();
 
+        $rx = Medicine::whereIn('medicine_id', array_column($data['items'], 'medicine_id'))->where('requires_prescription', true)->pluck('medicine_name');
+        if ($rx->isNotEmpty() && ! $request->boolean('prescription_checked')) {
+            return response()->json(['message' => self::rxMessage($rx->implode(', '))], 422);
+        }
+
         // Walk-ins may only take stock that is not already reserved for approved requests.
         foreach ($data['items'] as $i => $item) {
             $free = $this->inventory->freeStock((int) $item['medicine_id']);
@@ -80,7 +90,7 @@ class DispensingController extends Controller
             }
         }
 
-        $dispensing = DB::transaction(function () use ($resident, $data, $request) {
+        $dispensing = DB::transaction(function () use ($resident, $data, $request, $rx) {
             $req = MedicineRequest::create([
                 'resident_id' => $resident->resident_id,
                 'request_type' => 'medicine',
@@ -95,19 +105,25 @@ class DispensingController extends Controller
                 'quantity' => (int) $i['quantity'],
             ], $data['items']));
 
-            return $this->dispense($req->load(['items', 'resident']), $request->user());
+            return $this->dispense($req->load(['items', 'resident']), $request->user(), $rx->isNotEmpty());
         });
 
         return response()->json($dispensing, 201);
     }
 
-    private function dispense(MedicineRequest $req, User $staff): Dispensing
+    private static function rxMessage(string $names): string
     {
-        $dispensing = DB::transaction(function () use ($req, $staff) {
+        return "Prescription medicine ({$names}): check the resident's original doctor's prescription, then confirm before releasing.";
+    }
+
+    private function dispense(MedicineRequest $req, User $staff, bool $prescriptionChecked = false): Dispensing
+    {
+        $dispensing = DB::transaction(function () use ($req, $staff, $prescriptionChecked) {
             $dispensing = Dispensing::create([
                 'request_id' => $req->request_id,
                 'dispensed_by' => $staff->user_id,
                 'dispensed_at' => now(),
+                'prescription_checked' => $prescriptionChecked,
             ]);
 
             foreach ($req->items as $item) {

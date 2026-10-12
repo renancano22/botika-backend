@@ -33,7 +33,7 @@ class ResidentController extends Controller
         return [
             'resident' => $resident,
             'approved_requests' => $resident->requests()
-                ->with('items.medicine')
+                ->with(['items.medicine', 'prescription', 'prescriptionVerifier:user_id,name'])
                 ->where('request_type', 'medicine')
                 ->where('status', 'approved')
                 ->orderBy('request_date')

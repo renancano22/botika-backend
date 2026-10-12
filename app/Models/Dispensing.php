@@ -12,8 +12,8 @@ class Dispensing extends Model
     protected $primaryKey = 'dispensing_id';
     public $timestamps = false;
 
-    protected $fillable = ['request_id', 'dispensed_by', 'dispensed_at'];
-    protected $casts = ['dispensed_at' => 'datetime'];
+    protected $fillable = ['request_id', 'dispensed_by', 'dispensed_at', 'prescription_checked'];
+    protected $casts = ['dispensed_at' => 'datetime', 'prescription_checked' => 'boolean'];
 
     public function request(): BelongsTo
     {

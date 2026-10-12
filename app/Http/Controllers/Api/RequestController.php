@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Medicine;
 use App\Models\MedicineRequest;
+use App\Models\Prescription;
 use App\Models\User;
 use App\Services\InventoryService;
 use App\Services\SmsService;
@@ -22,7 +24,8 @@ class RequestController extends Controller
 {
     /** Everything the request status tracker shows (who reviewed, dispensed or cancelled it, and when). */
     public const DETAILS = [
-        'items.medicine:medicine_id,medicine_name,unit', 'resident', 'reviewer:user_id,name', 'canceller:user_id,name',
+        'items.medicine:medicine_id,medicine_name,unit,requires_prescription', 'resident',
+        'prescription', 'prescriptionVerifier:user_id,name', 'reviewer:user_id,name', 'canceller:user_id,name',
         'dispensing:dispensing_id,request_id,dispensed_by,dispensed_at', 'dispensing.dispenser:user_id,name',
     ];
 
@@ -58,12 +61,17 @@ class RequestController extends Controller
         abort_unless($resident, 403, 'Only residents can submit requests.');
 
         $data = $this->validateItems($request, true);
+        // Medicines that need a doctor's prescription: a photo/PDF of it must be uploaded with the request.
+        $rxNames = $data['request_type'] === 'medicine'
+            ? Medicine::whereIn('medicine_id', array_column($data['items'], 'medicine_id'))->where('requires_prescription', true)->pluck('medicine_name')
+            : collect();
+        $prescription = $rxNames->isNotEmpty() ? $this->validatePrescription($request, $rxNames->implode(', ')) : null;
         $note = $request->validate(['note' => 'nullable|string|max:500'], [
             'note.max' => 'Please keep your note under 500 characters.',
         ])['note'] ?? null;
         $this->checkAvailability($data['request_type'], $data['items']);
 
-        $req = DB::transaction(function () use ($resident, $data, $note) {
+        $req = DB::transaction(function () use ($resident, $data, $note, $prescription) {
             $req = MedicineRequest::create([
                 'resident_id' => $resident->resident_id,
                 'request_type' => $data['request_type'],
@@ -72,6 +80,9 @@ class RequestController extends Controller
                 'status' => 'pending',
             ]);
             $req->items()->createMany($data['items']);
+            if ($prescription) {
+                $req->prescription()->create($prescription);
+            }
             return $req;
         });
 
@@ -140,7 +151,18 @@ class RequestController extends Controller
     public function approve(Request $request, MedicineRequest $medicineRequest)
     {
         $this->authorizeReviewer($request, $medicineRequest);
-        $medicineRequest->load(['items.medicine', 'resident']);
+        $medicineRequest->load(['items.medicine', 'resident', 'prescription']);
+
+        // Prescription medicines: the staff must check the uploaded prescription before approving.
+        $rxNames = $medicineRequest->request_type === 'medicine' ? $medicineRequest->prescriptionMedicines() : collect();
+        if ($rxNames->isNotEmpty()) {
+            if (! $medicineRequest->prescription) {
+                throw ValidationException::withMessages(['prescription' => 'No prescription was uploaded for ' . $rxNames->implode(', ') . '. Reject the request or ask the resident to upload one.']);
+            }
+            if (! $request->boolean('prescription_verified')) {
+                throw ValidationException::withMessages(['prescription_verified' => 'Please check the prescription and confirm it is valid before approving.']);
+            }
+        }
 
         if ($medicineRequest->request_type === 'medicine') {
             $this->checkAvailability('medicine', $medicineRequest->items->map->only(['medicine_id', 'quantity'])->all());
@@ -158,6 +180,8 @@ class RequestController extends Controller
             'reviewed_by' => $request->user()->user_id,
             'reviewed_at' => now(),
             'remarks' => $request->input('remarks'),
+            'prescription_verified_at' => $rxNames->isNotEmpty() ? now() : null,
+            'prescription_verified_by' => $rxNames->isNotEmpty() ? $request->user()->user_id : null,
         ]);
         $this->sms->notify($medicineRequest->resident, $message, $medicineRequest->request_id, 'approved');
 
@@ -241,6 +265,72 @@ class RequestController extends Controller
                 ]);
             }
         }
+    }
+
+    /** Resident: replace the prescription of a pending request (e.g. the first photo was unclear). */
+    public function uploadPrescription(Request $request, MedicineRequest $medicineRequest)
+    {
+        $this->authorizeOwnPending($request, $medicineRequest);
+        $file = $this->validatePrescription($request, 'this request');
+
+        $medicineRequest->prescription()->delete();
+        $medicineRequest->prescription()->create($file);
+
+        return $medicineRequest->fresh(self::DETAILS);
+    }
+
+    /** The prescription file (for the resident who uploaded it, and for staff/admin). */
+    public function showPrescription(Request $request, MedicineRequest $medicineRequest)
+    {
+        $user = $request->user();
+        if ($user->role === User::ROLE_RESIDENT) {
+            abort_unless((int) $medicineRequest->resident_id === (int) $user->resident?->resident_id, 404);
+        }
+        $p = $medicineRequest->prescription;
+        abort_unless($p, 404, 'No prescription was uploaded for this request.');
+
+        return [
+            'file_name' => $p->file_name,
+            'mime_type' => $p->mime_type,
+            'data' => 'data:' . $p->mime_type . ';base64,' . $p->file_data,
+        ];
+    }
+
+    /**
+     * Validates an uploaded prescription sent as { name, data: "data:<type>;base64,..." }.
+     * @return array{file_name: string, mime_type: string, size: int, file_data: string, uploaded_at: \Illuminate\Support\Carbon}
+     */
+    private function validatePrescription(Request $request, string $forWhat): array
+    {
+        $input = $request->input('prescription');
+        if (! is_array($input) || empty($input['data'])) {
+            throw ValidationException::withMessages([
+                'prescription' => "A doctor's prescription is required for {$forWhat}. Please upload a clear photo or PDF of it.",
+            ]);
+        }
+
+        // "data:image/jpeg;base64,...." — check the type, then that the rest is plain base64 text.
+        $data = (string) $input['data'];
+        $comma = strpos($data, ',');
+        $isFile = $comma !== false && $comma < 100
+            && preg_match('#^data:([a-z/+.-]+);base64$#', substr($data, 0, $comma), $m)
+            && in_array($m[1], Prescription::MIME_TYPES, true);
+        $base64 = $isFile ? substr($data, $comma + 1) : '';
+        if (! $isFile || $base64 === '' || strspn($base64, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=') !== strlen($base64)) {
+            throw ValidationException::withMessages(['prescription' => 'The prescription must be a JPG, PNG or PDF file.']);
+        }
+        $size = (int) floor(strlen($base64) * 3 / 4);
+        if ($size > Prescription::MAX_BYTES) {
+            throw ValidationException::withMessages(['prescription' => 'The prescription file is too large (4 MB at most).']);
+        }
+
+        return [
+            'file_name' => mb_substr(trim((string) ($input['name'] ?? '')) ?: 'prescription', 0, 200),
+            'mime_type' => $m[1],
+            'size' => $size,
+            'file_data' => $base64,
+            'uploaded_at' => now(),
+        ];
     }
 
     private function authorizeOwnPending(Request $request, MedicineRequest $req): void

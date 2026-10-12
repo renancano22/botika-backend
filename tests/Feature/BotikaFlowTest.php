@@ -415,6 +415,54 @@ class BotikaFlowTest extends TestCase
         $this->getJson('/api/inventory/alerts', ['Authorization' => 'Bearer ' . $resident->json('token')])->assertForbidden();
     }
 
+    public function test_prescription_medicine_needs_uploaded_and_checked_prescription(): void
+    {
+        $staff = User::factory()->create();
+        $rx = Medicine::create(['medicine_name' => 'Amoxicillin 500mg', 'category' => 'Antibiotic', 'unit' => 'capsule', 'reorder_level' => 0, 'requires_prescription' => true]);
+        $otc = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 0]);
+        foreach ([$rx, $otc] as $m) {
+            Inventory::create(['medicine_id' => $m->medicine_id, 'quantity' => 50, 'expiration_date' => now()->addYear()->toDateString()]);
+        }
+        $reg = $this->postJson('/api/register', [
+            'name' => 'Nena Flores', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Gate', 'contact_no' => '09240000001',
+        ])->assertCreated();
+        $headers = ['Authorization' => 'Bearer ' . $reg->json('token')];
+        $qr = $reg->json('user.resident.qr_code');
+
+        $this->getJson('/api/medicines', $headers)->assertJsonPath('0.medicine_name', 'Amoxicillin 500mg')->assertJsonPath('0.requires_prescription', true);
+
+        // Without a prescription the request is refused; non-prescription medicine needs none.
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 10]]], $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['prescription']);
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $otc->medicine_id, 'quantity' => 5]]], $headers)
+            ->assertCreated();
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'prescription' => ['name' => 'rx.txt', 'data' => 'data:text/plain;base64,aGVsbG8='],
+            'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 10]]], $headers)->assertStatus(422);
+
+        $file = 'data:image/jpeg;base64,' . base64_encode('fake-photo-of-prescription');
+        $id = $this->postJson('/api/requests', ['request_type' => 'medicine', 'prescription' => ['name' => 'Prescription.jpg', 'data' => $file],
+            'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 10]]], $headers)->assertCreated()->json('request_id');
+
+        $this->getJson("/api/requests/{$id}", $headers)->assertJsonPath('prescription.file_name', 'Prescription.jpg')
+            ->assertJsonMissingPath('prescription.file_data');
+        $this->getJson("/api/requests/{$id}/prescription", $this->token($staff))->assertOk()->assertJsonPath('data', $file);
+
+        // Staff must confirm they checked the prescription before approving.
+        $this->postJson("/api/requests/{$id}/approve", [], $this->token($staff))->assertStatus(422)->assertJsonValidationErrors(['prescription_verified']);
+        $this->postJson("/api/requests/{$id}/approve", ['prescription_verified' => true], $this->token($staff))->assertOk()
+            ->assertJsonPath('prescription_verifier.name', $staff->name);
+
+        // ...and confirm they saw the original prescription when releasing the medicine.
+        $this->postJson('/api/dispensing', ['request_id' => $id, 'qr_code' => $qr], $this->token($staff))->assertStatus(422);
+        $this->postJson('/api/dispensing', ['request_id' => $id, 'qr_code' => $qr, 'prescription_checked' => true], $this->token($staff))->assertCreated();
+        $this->assertDatabaseHas('dispensing', ['request_id' => $id, 'prescription_checked' => true]);
+
+        // Walk-in dispensing of prescription medicine needs the same confirmation.
+        $this->postJson('/api/dispensing/walk-in', ['qr_code' => $qr, 'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 2]]], $this->token($staff))->assertStatus(422);
+        $this->postJson('/api/dispensing/walk-in', ['qr_code' => $qr, 'prescription_checked' => true, 'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 2]]], $this->token($staff))->assertCreated();
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];
