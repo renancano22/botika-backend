@@ -493,6 +493,50 @@ class BotikaFlowTest extends TestCase
         $this->getJson("/api/requests/{$first}", $this->token($staff))->assertOk()->assertJsonPath('status', 'approved');
     }
 
+    public function test_monthly_limit_of_100_and_walk_in_limit_of_30(): void
+    {
+        $staff = User::factory()->create();
+        $a = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $b = Medicine::create(['medicine_name' => 'Cetirizine 10mg', 'category' => 'Antihistamine', 'unit' => 'tablet', 'reorder_level' => 5]);
+        foreach ([$a, $b] as $m) {
+            Inventory::create(['medicine_id' => $m->medicine_id, 'quantity' => 300, 'expiration_date' => now()->addYear()->toDateString()]);
+        }
+        $reg = $this->postJson('/api/register', [
+            'name' => 'Maria Santos', 'email' => 'maria@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09171234567',
+        ])->assertCreated();
+        $qr = $reg->json('user.resident.qr_code');
+        $resident = User::where('email', 'maria@gmail.com')->firstOrFail();
+        $walkIn = fn (array $items) => $this->postJson('/api/dispensing/walk-in', ['qr_code' => $qr, 'items' => $items], $this->token($staff));
+        $ask = fn (int $medicineId, int $qty) => $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicineId, 'quantity' => $qty]]], $this->token($resident));
+
+        // Walk-in: at most 30 per medicine.
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 31]])->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 30], ['medicine_id' => $b->medicine_id, 'quantity' => 30]])->assertCreated(); // 60 received
+
+        // Online requests count too: 60 received + 30 pending = 90, so only 10 more.
+        $first = $ask($a->medicine_id, 30)->assertCreated()->json('request_id');
+        $ask($b->medicine_id, 20)->assertStatus(422)->assertJsonValidationErrors('monthly_limit');
+        $second = $ask($b->medicine_id, 10)->assertCreated()->json('request_id');
+        $this->getJson('/api/monthly-limit', $this->token($resident))->assertOk()
+            ->assertJsonPath('limit', 100)->assertJsonPath('claimed', 60)->assertJsonPath('pending', 40)->assertJsonPath('remaining', 0);
+
+        // Approving sets the medicine aside; a walk-in cannot go over the limit either.
+        $this->postJson("/api/requests/{$first}/approve", [], $this->token($staff))->assertOk();       // 60 + 30 = 90
+        $walkIn([['medicine_id' => $b->medicine_id, 'quantity' => 15]])->assertStatus(422)->assertJsonValidationErrors('monthly_limit');
+        $walkIn([['medicine_id' => $b->medicine_id, 'quantity' => 10]])->assertCreated();               // 70 received + 30 set aside = 100
+        $this->postJson("/api/requests/{$second}/approve", [], $this->token($staff))->assertStatus(422)->assertJsonValidationErrors('monthly_limit');
+        $this->getJson('/api/residents/lookup?code=' . $qr, $this->token($staff))->assertOk()
+            ->assertJsonPath('monthly.claimed', 70)->assertJsonPath('monthly.set_aside', 30)->assertJsonPath('monthly.remaining', 0);
+        $this->postJson('/api/dispensing', ['request_id' => $first, 'qr_code' => $qr], $this->token($staff))->assertCreated(); // exactly 100
+
+        // Next month the limit starts again (the pending request still counts as asked for).
+        $this->travelTo(now()->startOfMonth()->addMonthNoOverflow()->addDay());
+        $this->getJson('/api/monthly-limit', $this->token($resident))->assertOk()
+            ->assertJsonPath('claimed', 0)->assertJsonPath('pending', 10)->assertJsonPath('remaining', 90);
+        $this->postJson("/api/requests/{$second}/approve", [], $this->token($staff))->assertOk();
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];

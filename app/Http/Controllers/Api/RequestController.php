@@ -8,6 +8,7 @@ use App\Models\MedicineRequest;
 use App\Models\Prescription;
 use App\Models\User;
 use App\Services\InventoryService;
+use App\Services\MonthlyLimit;
 use App\Services\SmsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -42,6 +43,14 @@ class RequestController extends Controller
             ->orderByDesc('request_date')
             ->limit(500)
             ->get();
+    }
+
+    /** Resident: how many medicines they can still receive this month (monthly limit). */
+    public function monthlyLimit(Request $request, MonthlyLimit $limit)
+    {
+        $resident = $request->user()->resident;
+        abort_unless($resident, 403);
+        return $limit->usage($resident->resident_id);
     }
 
     /** Staff/admin: number of requests in each status, e.g. {"pending": 3, "approved": 5, ...} (?type=medicine|restock). */
@@ -83,6 +92,9 @@ class RequestController extends Controller
             'note.max' => 'Please keep your note under 500 characters.',
         ])['note'] ?? null;
         $this->checkAvailability($data['request_type'], $data['items']);
+        if ($data['request_type'] === 'medicine') {
+            app(MonthlyLimit::class)->check($resident->resident_id, array_sum(array_column($data['items'], 'quantity')), 'request');
+        }
 
         $req = DB::transaction(function () use ($resident, $data, $note, $prescription) {
             $req = MedicineRequest::create([
@@ -119,6 +131,9 @@ class RequestController extends Controller
 
         $data = $this->validateItems($request, false);
         $this->checkAvailability($medicineRequest->request_type, $data['items']);
+        if ($medicineRequest->request_type === 'medicine') {
+            app(MonthlyLimit::class)->check($medicineRequest->resident_id, array_sum(array_column($data['items'], 'quantity')), 'request', $medicineRequest->request_id);
+        }
 
         DB::transaction(function () use ($medicineRequest, $data) {
             $medicineRequest->items()->delete();
@@ -179,6 +194,7 @@ class RequestController extends Controller
 
         if ($medicineRequest->request_type === 'medicine') {
             $this->checkAvailability('medicine', $medicineRequest->items->map->only(['medicine_id', 'quantity'])->all());
+            app(MonthlyLimit::class)->check($medicineRequest->resident_id, (int) $medicineRequest->items->sum('quantity'), 'approve', $medicineRequest->request_id);
             $claimBy = MedicineRequest::claimDeadline(now())->format('F j, Y');
             // Kept short so it fits in one SMS (160 characters).
             $message = "BulanBotikaCare: Request #{$medicineRequest->request_id} APPROVED. Claim it at Botika ng Bayan Bulan "

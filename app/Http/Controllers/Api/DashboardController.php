@@ -103,6 +103,7 @@ class DashboardController extends Controller
 
         return [
             'resident' => $resident,
+            'monthly' => app(\App\Services\MonthlyLimit::class)->usage($resident->resident_id),
             'counts' => [
                 'pending' => (clone $requests)->where('status', 'pending')->count(),
                 'approved' => (clone $requests)->where('status', 'approved')->count(),
