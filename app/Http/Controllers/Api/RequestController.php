@@ -93,6 +93,8 @@ class RequestController extends Controller
         ])['note'] ?? null;
         if ($data['request_type'] === 'restock') {
             $this->checkNoOpenRestock($resident->resident_id, array_column($data['items'], 'medicine_id'));
+        } else {
+            $this->checkNoOpenMedicineRequest($resident->resident_id, array_column($data['items'], 'medicine_id'));
         }
         $this->checkAvailability($data['request_type'], $data['items']);
         if ($data['request_type'] === 'medicine') {
@@ -275,6 +277,33 @@ class RequestController extends Controller
         ], $data['items']);
 
         return $data;
+    }
+
+    /**
+     * One open medicine request per medicine: if the resident already asked for this medicine and the
+     * request is still pending, they edit that request instead of making a new one (all in one group).
+     * If it is already approved, they claim it first (or cancel it and send a new request).
+     */
+    private function checkNoOpenMedicineRequest(int $residentId, array $medicineIds): void
+    {
+        $open = MedicineRequest::with('items.medicine:medicine_id,medicine_name')
+            ->where('resident_id', $residentId)
+            ->where('request_type', 'medicine')
+            ->whereIn('status', ['pending', 'approved'])
+            ->whereHas('items', fn ($q) => $q->whereIn('medicine_id', $medicineIds))
+            ->orderBy('request_date')
+            ->first();
+        if (! $open) {
+            return;
+        }
+
+        $name = $open->items->whereIn('medicine_id', $medicineIds)->first()?->medicine?->medicine_name ?? 'this medicine';
+        throw ValidationException::withMessages([
+            'items' => $open->status === 'pending'
+                ? "You already requested {$name} in request #{$open->request_id}. Please edit that request instead of making a new one."
+                : "{$name} is already approved for you in request #{$open->request_id} and is ready for pickup. Please claim it first.",
+            'open_request_id' => (string) $open->request_id,
+        ]);
     }
 
     /**

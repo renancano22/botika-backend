@@ -474,8 +474,16 @@ class BotikaFlowTest extends TestCase
         ])->assertCreated();
         $headers = ['Authorization' => 'Bearer ' . $reg->json('token')];
 
+        $other = Medicine::create(['medicine_name' => 'Cetirizine 10mg', 'category' => 'Antihistamine', 'unit' => 'tablet', 'reorder_level' => 5]);
+        Inventory::create(['medicine_id' => $other->medicine_id, 'quantity' => 50, 'expiration_date' => now()->addYear()->toDateString()]);
         $first = $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 2]]], $headers)->json('request_id');
-        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 3]]], $headers)->assertCreated();
+        // The same medicine again while #first is open: the resident is sent back to edit that request.
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 3]]], $headers)
+            ->assertStatus(422)->assertJsonPath('errors.open_request_id.0', (string) $first)
+            ->assertJsonPath('errors.items.0', "You already requested Paracetamol 500mg in request #{$first}. Please edit that request instead of making a new one.");
+        $this->putJson("/api/requests/{$first}", ['items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 5]]], $headers)->assertOk()
+            ->assertJsonPath('items.0.quantity', 5);
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $other->medicine_id, 'quantity' => 3]]], $headers)->assertCreated();
         $this->postJson("/api/requests/{$first}/approve", [], $this->token($staff))->assertOk();
 
         $this->getJson('/api/requests/counts?type=medicine', $headers)->assertForbidden(); // residents cannot
