@@ -94,6 +94,7 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::get('/reports/{type}', [ReportController::class, 'generate']);
 
         Route::get('/forecasts', [ForecastController::class, 'index']);
+        Route::post('/forecasts/generate', [ForecastController::class, 'generate']);
         Route::get('/forecasts/{medicine}', [ForecastController::class, 'show']);
     });
 });

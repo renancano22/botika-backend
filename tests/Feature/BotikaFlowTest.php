@@ -469,5 +469,87 @@ class BotikaFlowTest extends TestCase
         $this->assertEqualsWithDelta(30.0, ForecastService::movingAverage($series), 0.001);
         $this->assertEqualsWithDelta(50.0, ForecastService::linearRegression($series), 0.001);
         $this->assertEqualsWithDelta(24.67, ForecastService::exponentialSmoothing($series), 0.01);
+
+        // Several months ahead: moving average uses its own forecasts, the trend line keeps going, smoothing stays level.
+        $ma = ForecastService::forecastSeries('moving_average', $series, 2);
+        $this->assertEqualsWithDelta(30.0, $ma[0], 0.001);
+        $this->assertEqualsWithDelta(33.33, $ma[1], 0.01);
+        $this->assertEqualsWithDelta(60.0, ForecastService::forecastSeries('linear_regression', $series, 2)[1], 0.001);
+        $this->assertEqualsWithDelta(24.67, ForecastService::forecastSeries('exponential_smoothing', $series, 3)[2], 0.01);
+        $this->assertSame([0.0, 0.0], ForecastService::forecastSeries('linear_regression', [], 2));
+    }
+
+    public function test_demand_forecasting_page_data_and_saving(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $staff = User::factory()->create();
+        $para = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $ceti = Medicine::create(['medicine_name' => 'Cetirizine 10mg', 'category' => 'Antihistamine', 'unit' => 'tablet', 'reorder_level' => 5]);
+        Inventory::create(['medicine_id' => $para->medicine_id, 'quantity' => 10, 'expiration_date' => now()->addYear()->toDateString()]);
+        Inventory::create(['medicine_id' => $ceti->medicine_id, 'quantity' => 100, 'expiration_date' => now()->addYear()->toDateString()]);
+
+        $qr1 = $this->postJson('/api/register', [
+            'name' => 'Maria Santos', 'email' => 'maria@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09171234567',
+        ])->assertCreated()->json('user.resident.qr_code');
+        $qr2 = $this->postJson('/api/register', [
+            'name' => 'Jose Reyes', 'email' => 'jose@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Bical', 'contact_no' => '09181234567',
+        ])->assertCreated()->json('user.resident.qr_code');
+        $maria = \App\Models\Resident::where('qr_code', $qr1)->firstOrFail();
+        $jose = \App\Models\Resident::where('qr_code', $qr2)->firstOrFail();
+
+        // 10 tablets of paracetamol dispensed to Maria in each of the past 6 months.
+        for ($k = 1; $k <= 6; $k++) {
+            $date = now()->startOfMonth()->subMonthsNoOverflow($k)->addDays(5);
+            $req = \App\Models\MedicineRequest::create(['resident_id' => $maria->resident_id, 'request_type' => 'medicine', 'status' => 'dispensed', 'request_date' => $date, 'reviewed_at' => $date]);
+            $req->items()->create(['medicine_id' => $para->medicine_id, 'quantity' => 10]);
+            $d = \App\Models\Dispensing::create(['request_id' => $req->request_id, 'dispensed_by' => $staff->user_id, 'dispensed_at' => $date]);
+            \App\Models\DispensingItem::create(['dispensing_id' => $d->dispensing_id, 'medicine_id' => $para->medicine_id, 'quantity' => 10]);
+        }
+        // A pending request counts as "requested" but not as "approved" for the barangay ranking.
+        $pending = \App\Models\MedicineRequest::create(['resident_id' => $jose->resident_id, 'request_type' => 'medicine', 'status' => 'pending', 'request_date' => now()]);
+        $pending->items()->create(['medicine_id' => $ceti->medicine_id, 'quantity' => 2]);
+
+        $this->getJson('/api/forecasts', $this->token($staff))->assertForbidden();
+        $this->getJson('/api/forecasts?horizon=2', $this->token($admin))->assertStatus(422);
+
+        $res = $this->getJson('/api/forecasts?months=6&horizon=3&method=moving_average', $this->token($admin))->assertOk()
+            ->assertJsonPath('method', 'moving_average')
+            ->assertJsonCount(6, 'history_keys')
+            ->assertJsonCount(3, 'forecast_keys')
+            ->assertJsonPath('forecast_keys.0', now()->format('Y-m'))
+            ->assertJsonPath('summary.medicines_analyzed', 2)
+            ->assertJsonPath('summary.potential_stockouts', 1)
+            ->assertJsonPath('summary.restock_recommendations', 1)
+            ->assertJsonPath('top_barangays.0.barangay', 'Zone I Poblacion')
+            ->assertJsonPath('top_barangays.0.total', 6)
+            ->assertJsonCount(1, 'top_barangays')
+            ->assertJsonPath('top_medicines.0.medicine_name', 'Paracetamol 500mg')
+            ->assertJsonPath('top_medicines.0.total', 6)
+            ->assertJsonPath('top_medicines.1.medicine_name', 'Cetirizine 10mg');
+
+        $rows = collect($res->json('results'))->keyBy('medicine_name');
+        $p = $rows['Paracetamol 500mg'];
+        $this->assertSame(30, $p['predicted_demand']);            // 10 a month for 3 months
+        $this->assertSame(25, $p['recommended_restock']);         // 30 + reorder level 5 - 10 in stock
+        $this->assertSame('high', $p['priority']);                // stock runs out within the period
+        $this->assertCount(3, $p['forecast']);
+        $this->assertEqualsWithDelta(10, $p['history'][now()->startOfMonth()->subMonth()->format('Y-m')], 0.001);
+        $c = $rows['Cetirizine 10mg'];
+        $this->assertSame(0, $c['recommended_restock']);
+        $this->assertNull($c['priority']);
+
+        // No method chosen: the most accurate one is used.
+        $auto = $this->getJson('/api/forecasts?months=6', $this->token($admin))->assertOk()->json();
+        $this->assertSame($auto['best_method'], $auto['method']);
+        $this->assertSame(3, $auto['horizon']);
+
+        // Generate Forecast saves every method's monthly forecast; running it again updates the same rows.
+        $this->postJson('/api/forecasts/generate', ['months' => 6, 'horizon' => 3], $this->token($staff))->assertForbidden();
+        $this->postJson('/api/forecasts/generate', ['months' => 6, 'horizon' => 3], $this->token($admin))->assertOk()->assertJsonPath('saved', true);
+        $this->postJson('/api/forecasts/generate', ['months' => 6, 'horizon' => 3], $this->token($admin))->assertOk();
+        $this->assertSame(2 * 3 * 3, \App\Models\Forecast::count());
+        $this->assertEqualsWithDelta(10, \App\Models\Forecast::where('medicine_id', $para->medicine_id)->where('method', 'linear_regression')->value('predicted_demand'), 0.01);
     }
 }
