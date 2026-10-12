@@ -45,8 +45,8 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 30]]], $residentHeaders)
             ->assertStatus(422);
 
-        $requestId = $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 10]]], $residentHeaders)
-            ->assertCreated()->json('request_id');
+        $requestId = $this->postJson('/api/requests', ['request_type' => 'medicine', 'note' => 'For my fever, as advised by the RHU nurse.', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 10]]], $residentHeaders)
+            ->assertCreated()->assertJsonPath('resident_note', 'For my fever, as advised by the RHU nurse.')->json('request_id');
 
         // Residents cannot approve.
         $this->postJson("/api/requests/{$requestId}/approve", [], $residentHeaders)->assertForbidden();
@@ -337,7 +337,7 @@ class BotikaFlowTest extends TestCase
 
         // Asking for more than the limit gives a clear message.
         $this->postJson('/api/requests', ['request_type' => 'restock', ...$item(50000)], $headersB)
-            ->assertStatus(422)->assertJsonPath('errors', ['items.0.quantity' => ['You can request at most 1000 per medicine.']]);
+            ->assertStatus(422)->assertJsonPath('errors', ['items.0.quantity' => ['You can request at most 30 per medicine.']]);
 
         // A's approved request sets aside 8; B asks for a restock of 5 (only 2 are free) and the admin approves it.
         $requestA = $this->postJson('/api/requests', ['request_type' => 'medicine', ...$item(8)], $headersA)->assertCreated()->json('request_id');

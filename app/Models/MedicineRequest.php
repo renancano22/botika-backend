@@ -14,7 +14,7 @@ class MedicineRequest extends Model
     protected $primaryKey = 'request_id';
     public $timestamps = false;
 
-    protected $fillable = ['resident_id', 'request_type', 'request_date', 'status', 'reviewed_by', 'reviewed_at', 'remarks',
+    protected $fillable = ['resident_id', 'request_type', 'request_date', 'resident_note', 'status', 'reviewed_by', 'reviewed_at', 'remarks',
         'cancelled_at', 'cancelled_by', 'fulfilled_at', 'reminded_at'];
     protected $casts = ['request_date' => 'datetime', 'reviewed_at' => 'datetime', 'cancelled_at' => 'datetime', 'fulfilled_at' => 'datetime', 'reminded_at' => 'datetime'];
     protected $appends = ['claim_by'];

@@ -10,7 +10,7 @@ return [
     'unclaimed_days' => (int) env('BOTIKA_UNCLAIMED_DAYS', 7),
     // Most a resident can ask for of one medicine in a single request (medicine or restock request).
     // Keep the same number as MAX_REQUEST_QUANTITY in the frontend (src/validation.ts).
-    'max_request_quantity' => (int) env('BOTIKA_MAX_REQUEST_QUANTITY', 1000),
+    'max_request_quantity' => (int) env('BOTIKA_MAX_REQUEST_QUANTITY', 30),
 
     // The 63 barangays of Bulan, Sorsogon (source: PhilAtlas / PSGC). Used for the address dropdown.
     'barangays' => [

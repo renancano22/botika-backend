@@ -58,13 +58,17 @@ class RequestController extends Controller
         abort_unless($resident, 403, 'Only residents can submit requests.');
 
         $data = $this->validateItems($request, true);
+        $note = $request->validate(['note' => 'nullable|string|max:500'], [
+            'note.max' => 'Please keep your note under 500 characters.',
+        ])['note'] ?? null;
         $this->checkAvailability($data['request_type'], $data['items']);
 
-        $req = DB::transaction(function () use ($resident, $data) {
+        $req = DB::transaction(function () use ($resident, $data, $note) {
             $req = MedicineRequest::create([
                 'resident_id' => $resident->resident_id,
                 'request_type' => $data['request_type'],
                 'request_date' => now(),
+                'resident_note' => $note ? trim($note) : null,
                 'status' => 'pending',
             ]);
             $req->items()->createMany($data['items']);
