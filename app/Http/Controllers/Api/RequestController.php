@@ -91,6 +91,9 @@ class RequestController extends Controller
         $note = $request->validate(['note' => 'nullable|string|max:500'], [
             'note.max' => 'Please keep your note under 500 characters.',
         ])['note'] ?? null;
+        if ($data['request_type'] === 'restock') {
+            $this->checkNoOpenRestock($resident->resident_id, array_column($data['items'], 'medicine_id'));
+        }
         $this->checkAvailability($data['request_type'], $data['items']);
         if ($data['request_type'] === 'medicine') {
             app(MonthlyLimit::class)->check($resident->resident_id, array_sum(array_column($data['items'], 'quantity')), 'request');
@@ -272,6 +275,29 @@ class RequestController extends Controller
         ], $data['items']);
 
         return $data;
+    }
+
+    /**
+     * One restock request per medicine at a time: while a resident's restock request for a medicine is
+     * still open (pending, or approved and waiting for stock), they cannot send another one for it.
+     */
+    private function checkNoOpenRestock(int $residentId, array $medicineIds): void
+    {
+        $open = MedicineRequest::with('items.medicine:medicine_id,medicine_name')
+            ->where('resident_id', $residentId)
+            ->where('request_type', 'restock')
+            ->whereIn('status', ['pending', 'approved'])
+            ->whereHas('items', fn ($q) => $q->whereIn('medicine_id', $medicineIds))
+            ->orderBy('request_date')
+            ->first();
+        if (! $open) {
+            return;
+        }
+
+        $name = $open->items->whereIn('medicine_id', $medicineIds)->first()?->medicine?->medicine_name ?? 'this medicine';
+        throw ValidationException::withMessages([
+            'items' => "You already submitted a restock request for {$name} (request #{$open->request_id}). We will notify you when the medicine is available.",
+        ]);
     }
 
     /**

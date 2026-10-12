@@ -537,6 +537,29 @@ class BotikaFlowTest extends TestCase
         $this->postJson("/api/requests/{$second}/approve", [], $this->token($staff))->assertOk();
     }
 
+    public function test_one_open_restock_request_per_medicine(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $a = Medicine::create(['medicine_name' => 'Losartan 50mg', 'category' => 'Antihypertensive', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $b = Medicine::create(['medicine_name' => 'Metformin 500mg', 'category' => 'Antidiabetic', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $headers = ['Authorization' => 'Bearer ' . $this->postJson('/api/register', [
+            'name' => 'Maria Santos', 'email' => 'maria@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09171234567',
+        ])->assertCreated()->json('token')];
+        $restock = fn (int $id) => $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $id, 'quantity' => 10]]], $headers);
+
+        $first = $restock($a->medicine_id)->assertCreated()->json('request_id');
+        $restock($a->medicine_id)->assertStatus(422)->assertJsonValidationErrors('items')
+            ->assertJsonFragment(['items' => ["You already submitted a restock request for Losartan 50mg (request #{$first}). We will notify you when the medicine is available."]]);
+        $restock($b->medicine_id)->assertCreated(); // a different medicine is fine
+
+        // Still blocked while approved and waiting for stock; allowed again once it is closed.
+        $this->postJson("/api/requests/{$first}/approve", [], $this->token($admin))->assertOk();
+        $restock($a->medicine_id)->assertStatus(422);
+        $this->postJson("/api/requests/{$first}/cancel", [], $headers)->assertOk();
+        $restock($a->medicine_id)->assertCreated();
+    }
+
     public function test_forecasting_techniques(): void
     {
         $series = [10, 20, 30, 40];
