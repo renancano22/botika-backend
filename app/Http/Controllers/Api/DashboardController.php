@@ -106,7 +106,8 @@ class DashboardController extends Controller
             'monthly' => app(\App\Services\MonthlyLimit::class)->usage($resident->resident_id),
             'counts' => [
                 'pending' => (clone $requests)->where('status', 'pending')->count(),
-                'approved' => (clone $requests)->where('status', 'approved')->count(),
+                // ready to claim = approved medicine requests (approved restock requests are still waiting for stock)
+                'approved' => (clone $requests)->where('request_type', 'medicine')->where('status', 'approved')->count(),
                 'dispensed' => (clone $requests)->where('status', 'dispensed')->count(),
                 'available_medicines' => Medicine::withAvailableStock()->get()->filter(fn ($m) => $m->available_stock > 0)->count(),
             ],
