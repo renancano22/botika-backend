@@ -480,7 +480,7 @@ class BotikaFlowTest extends TestCase
         // The same medicine again while #first is open: the resident is sent back to edit that request.
         $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 3]]], $headers)
             ->assertStatus(422)->assertJsonPath('errors.open_request_id.0', (string) $first)
-            ->assertJsonPath('errors.items.0', "You already requested Paracetamol 500mg in request #{$first}. Please edit that request instead of making a new one.");
+            ->assertJsonPath('errors.items.0', "You already requested Paracetamol 500mg in request No. {$first}. Please edit that request instead of making a new one.");
         $this->putJson("/api/requests/{$first}", ['items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 5]]], $headers)->assertOk()
             ->assertJsonPath('items.0.quantity', 5);
         $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $other->medicine_id, 'quantity' => 3]]], $headers)->assertCreated();
@@ -558,7 +558,7 @@ class BotikaFlowTest extends TestCase
 
         $first = $restock($a->medicine_id)->assertCreated()->json('request_id');
         $restock($a->medicine_id)->assertStatus(422)->assertJsonValidationErrors('items')
-            ->assertJsonFragment(['items' => ["You already submitted a restock request for Losartan 50mg (request #{$first}). We will notify you when the medicine is available."]]);
+            ->assertJsonFragment(['items' => ["You already submitted a restock request for Losartan 50mg (request No. {$first}). We will notify you when the medicine is available."]]);
         $restock($b->medicine_id)->assertCreated(); // a different medicine is fine
 
         // Still blocked while approved and waiting for stock; allowed again once it is closed.

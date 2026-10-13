@@ -120,8 +120,8 @@ class RequestController extends Controller
         $this->sms->notifyInApp(
             $resident,
             $data['request_type'] === 'restock'
-                ? "Your restock request #{$req->request_id} has been submitted and is now under review by the administrator."
-                : "Your medicine request #{$req->request_id} has been submitted and is now under review by the pharmacy staff.",
+                ? "Your restock request No. {$req->request_id} has been submitted and is now under review by the administrator."
+                : "Your medicine request No. {$req->request_id} has been submitted and is now under review by the pharmacy staff.",
             $req->request_id,
             'submitted'
         );
@@ -173,7 +173,7 @@ class RequestController extends Controller
         // In-app confirmation only (the resident cancelled it themselves).
         $this->sms->notifyInApp(
             $medicineRequest->resident,
-            "You cancelled your {$medicineRequest->request_type} request #{$medicineRequest->request_id}. You may submit a new request anytime.",
+            "You cancelled your {$medicineRequest->request_type} request No. {$medicineRequest->request_id}. You may submit a new request anytime.",
             $medicineRequest->request_id,
             'cancelled'
         );
@@ -202,10 +202,10 @@ class RequestController extends Controller
             app(MonthlyLimit::class)->check($medicineRequest->resident_id, (int) $medicineRequest->items->sum('quantity'), 'approve', $medicineRequest->request_id);
             $claimBy = MedicineRequest::claimDeadline(now())->format('F j, Y');
             // Kept short so it fits in one SMS (160 characters).
-            $message = "BulanBotikaCare: Request #{$medicineRequest->request_id} APPROVED. Claim it at Botika ng Bayan Bulan "
+            $message = "BulanBotikaCare: Request No. {$medicineRequest->request_id} APPROVED. Claim it at Botika ng Bayan Bulan "
                 . "on or before {$claimBy} or it will be cancelled. Bring QR/ID {$medicineRequest->resident->qr_code}.";
         } else {
-            $message = "BulanBotikaCare: Your restock request #{$medicineRequest->request_id} has been approved. "
+            $message = "BulanBotikaCare: Your restock request No. {$medicineRequest->request_id} has been approved. "
                 . 'We will send you an SMS once the medicine is available.';
         }
 
@@ -244,7 +244,7 @@ class RequestController extends Controller
         $type = $medicineRequest->request_type === 'restock' ? 'restock' : 'medicine';
         $this->sms->notify(
             $medicineRequest->resident,
-            "BulanBotikaCare: Your {$type} request #{$medicineRequest->request_id} was not approved. Reason: {$data['remarks']}",
+            "BulanBotikaCare: Your {$type} request No. {$medicineRequest->request_id} was not approved. Reason: {$data['remarks']}",
             $medicineRequest->request_id,
             'rejected'
         );
@@ -300,8 +300,8 @@ class RequestController extends Controller
         $name = $open->items->whereIn('medicine_id', $medicineIds)->first()?->medicine?->medicine_name ?? 'this medicine';
         throw ValidationException::withMessages([
             'items' => $open->status === 'pending'
-                ? "You already requested {$name} in request #{$open->request_id}. Please edit that request instead of making a new one."
-                : "{$name} is already approved for you in request #{$open->request_id} and is ready for pickup. Please claim it first.",
+                ? "You already requested {$name} in request No. {$open->request_id}. Please edit that request instead of making a new one."
+                : "{$name} is already approved for you in request No. {$open->request_id} and is ready for pickup. Please claim it first.",
             'open_request_id' => (string) $open->request_id,
         ]);
     }
@@ -325,7 +325,7 @@ class RequestController extends Controller
 
         $name = $open->items->whereIn('medicine_id', $medicineIds)->first()?->medicine?->medicine_name ?? 'this medicine';
         throw ValidationException::withMessages([
-            'items' => "You already submitted a restock request for {$name} (request #{$open->request_id}). We will notify you when the medicine is available.",
+            'items' => "You already submitted a restock request for {$name} (request No. {$open->request_id}). We will notify you when the medicine is available.",
         ]);
     }
 

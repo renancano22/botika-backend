@@ -224,7 +224,7 @@ class InventoryService
             $req->update(['status' => 'expired', 'cancelled_at' => now(), 'cancelled_by' => null]);
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Request #{$req->request_id} was CANCELLED because it was not claimed by {$deadline}. Please submit a new request if you still need the medicine.",
+                "BulanBotikaCare: Request No. {$req->request_id} was CANCELLED because it was not claimed by {$deadline}. Please submit a new request if you still need the medicine.",
                 $req->request_id,
                 'expired'
             );
@@ -243,7 +243,7 @@ class InventoryService
             $req->update(['reminded_at' => now()]);
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Reminder: claim your medicines for request #{$req->request_id} at Botika ng Bayan Bulan on or before {$deadline} or it will be cancelled.",
+                "BulanBotikaCare: Reminder: claim your medicines for request No. {$req->request_id} at Botika ng Bayan Bulan on or before {$deadline} or it will be cancelled.",
                 $req->request_id,
                 'reminder'
             );
