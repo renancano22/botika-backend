@@ -6,6 +6,7 @@ use App\Models\Inventory;
 use App\Models\Medicine;
 use App\Models\User;
 use App\Services\ForecastService;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -575,13 +576,89 @@ class BotikaFlowTest extends TestCase
         $this->assertEqualsWithDelta(50.0, ForecastService::linearRegression($series), 0.001);
         $this->assertEqualsWithDelta(24.67, ForecastService::exponentialSmoothing($series), 0.01);
 
-        // Several months ahead: moving average uses its own forecasts, the trend line keeps going, smoothing stays level.
-        $ma = ForecastService::forecastSeries('moving_average', $series, 2);
-        $this->assertEqualsWithDelta(30.0, $ma[0], 0.001);
-        $this->assertEqualsWithDelta(33.33, $ma[1], 0.01);
+        // Several months ahead: the moving average and smoothing stay level, the trend line keeps going.
+        $this->assertSame([30.0, 30.0], ForecastService::forecastSeries('moving_average', $series, 2));
         $this->assertEqualsWithDelta(60.0, ForecastService::forecastSeries('linear_regression', $series, 2)[1], 0.001);
         $this->assertEqualsWithDelta(24.67, ForecastService::forecastSeries('exponential_smoothing', $series, 3)[2], 0.01);
-        $this->assertSame([0.0, 0.0], ForecastService::forecastSeries('linear_regression', [], 2));
+
+        // Not enough months: no made-up numbers. A trend line needs at least 3 months.
+        $this->assertNull(ForecastService::forecastSeries('linear_regression', [], 2));
+        $this->assertNull(ForecastService::forecastSeries('linear_regression', [17], 2));
+        $this->assertNull(ForecastService::forecastSeries('linear_regression', [17, 20], 2));
+        $this->assertNull(ForecastService::forecastSeries('moving_average', [], 2));
+        // One month: the moving average and smoothing can only repeat that month (a provisional estimate).
+        $this->assertSame([17.0, 17.0], ForecastService::forecastSeries('moving_average', [17], 2));
+        $this->assertSame([17.0, 17.0], ForecastService::forecastSeries('exponential_smoothing', [17], 2));
+
+        // The numbers behind each forecast.
+        $ma = ForecastService::calculation('moving_average', ['2026-07' => 5, '2026-08' => 10, '2026-09' => 20, '2026-10' => 30], 1);
+        $this->assertSame(3, $ma['window']);
+        $this->assertSame(['2026-08', '2026-09', '2026-10'], $ma['months']);
+        $this->assertEqualsWithDelta(20, $ma['average'], 0.001);
+        $lr = ForecastService::calculation('linear_regression', ['a' => 30, 'b' => 20, 'c' => 10], 3);
+        $this->assertSame('down', $lr['trend']);
+        $this->assertEqualsWithDelta(-10, $lr['slope'], 0.001);
+        $this->assertTrue($lr['below_zero']);
+        $this->assertSame([0.0, 0.0, 0.0], ForecastService::forecastSeries('linear_regression', [30, 20, 10], 3)); // never below 0
+        $this->assertSame('flat', ForecastService::calculation('linear_regression', [10, 10, 10], 1)['trend']);
+        $es = ForecastService::calculation('exponential_smoothing', ['2026-08' => 10, '2026-09' => 20], 1);
+        $this->assertEqualsWithDelta(13, $es['level'], 0.001); // 0.3 x 20 + 0.7 x 10
+        $this->assertCount(2, $es['steps']);
+    }
+
+    public function test_forecast_with_limited_records(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $staff = User::factory()->create();
+        $para = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $ceti = Medicine::create(['medicine_name' => 'Cetirizine 10mg', 'category' => 'Antihistamine', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $qr = $this->postJson('/api/register', [
+            'name' => 'Maria Santos', 'email' => 'maria@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09171234567',
+        ])->assertCreated()->json('user.resident.qr_code');
+        $maria = \App\Models\Resident::where('qr_code', $qr)->firstOrFail();
+        $give = function (Carbon $date, int $qty) use ($maria, $staff, $para) {
+            $req = \App\Models\MedicineRequest::create(['resident_id' => $maria->resident_id, 'request_type' => 'medicine', 'status' => 'dispensed', 'request_date' => $date, 'reviewed_at' => $date]);
+            $req->items()->create(['medicine_id' => $para->medicine_id, 'quantity' => $qty]);
+            $d = \App\Models\Dispensing::create(['request_id' => $req->request_id, 'dispensed_by' => $staff->user_id, 'dispensed_at' => $date]);
+            \App\Models\DispensingItem::create(['dispensing_id' => $d->dispensing_id, 'medicine_id' => $para->medicine_id, 'quantity' => $qty]);
+        };
+
+        // Only this month so far (17 tablets): a provisional basis; no trend line can be drawn.
+        $give(now()->startOfMonth(), 17);
+        $res = $this->getJson('/api/forecasts?months=6&horizon=3&method=linear_regression', $this->token($admin))->assertOk()
+            ->assertJsonPath('method', 'moving_average')               // Linear Regression is not available yet
+            ->assertJsonPath('requested_method', 'linear_regression')
+            ->assertJsonPath('basis.months', [now()->format('Y-m')])
+            ->assertJsonPath('basis.partial', true)
+            ->assertJsonPath('basis.complete_months', 0)
+            ->assertJsonPath('methods_info.linear_regression.available', false)
+            ->assertJsonPath('methods_info.linear_regression.min_months', 3)
+            ->assertJsonPath('methods_info.moving_average.available', true)
+            ->assertJsonPath('methods_info.moving_average.provisional', true)
+            ->assertJsonPath('methods_info.exponential_smoothing.available', true)
+            ->assertJsonPath('overall.methods.linear_regression', null);
+        $rows = collect($res->json('results'))->keyBy('medicine_name');
+        $this->assertSame(51, $rows['Paracetamol 500mg']['predicted_demand']); // 17 a month x 3, provisional
+        $this->assertNull($rows['Paracetamol 500mg']['methods']['linear_regression']);
+        $this->assertEqualsWithDelta(51, $rows['Paracetamol 500mg']['methods']['exponential_smoothing']['predicted_demand'], 0.01);
+        $this->assertSame(0, $rows['Cetirizine 10mg']['predicted_demand']); // none given out since records began: a real 0
+
+        // Nothing is saved for a method that could not forecast.
+        $this->postJson('/api/forecasts/generate', ['months' => 6, 'horizon' => 3], $this->token($admin))->assertOk();
+        $this->assertSame(0, \App\Models\Forecast::where('method', 'linear_regression')->count());
+        $this->assertSame(2 * 3, \App\Models\Forecast::where('method', 'moving_average')->count());
+
+        // Next month: last month is complete, so it is the basis and the new month in progress is not counted yet.
+        $this->travelTo(now()->startOfMonth()->addMonthNoOverflow()->addDays(3));
+        $give(now(), 2);
+        $res = $this->getJson('/api/forecasts?months=6&horizon=1&method=moving_average', $this->token($admin))->assertOk()
+            ->assertJsonPath('basis.months', [now()->subMonthNoOverflow()->format('Y-m')])
+            ->assertJsonPath('basis.partial', false)
+            ->assertJsonPath('months_with_data', 2);
+        $p = collect($res->json('results'))->firstWhere('medicine_name', 'Paracetamol 500mg');
+        $this->assertSame(17, $p['predicted_demand']);
+        $this->assertSame(2, $p['history'][now()->format('Y-m')]); // still shown as this month so far
     }
 
     public function test_demand_forecasting_page_data_and_saving(): void
