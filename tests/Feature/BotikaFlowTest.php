@@ -275,6 +275,39 @@ class BotikaFlowTest extends TestCase
             ->assertOk();
         $this->postJson('/api/login', ['login' => 'ana@gmail.com', 'password' => 'newpass123'])->assertOk();
 
+        // Edit Profile "Save Changes": information, optional password and picture in one request.
+        $info = ['name' => 'Ana Dela Cruz', 'email' => 'ana@gmail.com', 'contact_no' => '09197654321', 'barangay' => 'Zone II Poblacion', 'address_line' => ''];
+        // Blank password fields: the information is saved and the password is left as it is.
+        $this->putJson('/api/profile', array_merge($info, ['name' => 'Ana  B. Cruz', 'address_line' => ' <b>Purok 5</b> ',
+            'current_password' => '', 'password' => '', 'password_confirmation' => '']), $headers)->assertOk()
+            ->assertJsonPath('user.name', 'Ana B. Cruz')
+            ->assertJsonPath('address_line', 'Purok 5')
+            ->assertJsonPath('password_changed', false);
+        $this->postJson('/api/login', ['login' => 'ana@gmail.com', 'password' => 'newpass123'])->assertOk();
+
+        // Wrong current password, missing current password, mismatch or weak password: nothing is saved.
+        $this->putJson('/api/profile', array_merge($info, ['name' => 'Changed Name', 'current_password' => 'wrong123', 'password' => 'another123', 'password_confirmation' => 'another123']), $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['current_password']);
+        $this->putJson('/api/profile', array_merge($info, ['password' => 'another123', 'password_confirmation' => 'another123']), $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['current_password']);
+        $this->putJson('/api/profile', array_merge($info, ['current_password' => 'newpass123', 'password' => 'another123', 'password_confirmation' => 'another999']), $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['password']);
+        $this->putJson('/api/profile', array_merge($info, ['current_password' => 'newpass123', 'password' => 'short', 'password_confirmation' => 'short']), $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['password']);
+        $this->putJson('/api/profile', array_merge($info, ['current_password' => 'newpass123', 'password' => 'newpass123', 'password_confirmation' => 'newpass123']), $headers)
+            ->assertStatus(422)->assertJsonValidationErrors(['password']); // must be a new password
+        $this->getJson('/api/profile', $headers)->assertJsonPath('user.name', 'Ana B. Cruz');
+
+        // Correct current password: information, new password and new picture are saved together.
+        $this->putJson('/api/profile', array_merge($info, ['current_password' => 'newpass123', 'password' => 'another123', 'password_confirmation' => 'another123', 'photo' => $photo]), $headers)
+            ->assertOk()
+            ->assertJsonPath('password_changed', true)
+            ->assertJsonPath('user.name', 'Ana Dela Cruz')
+            ->assertJsonPath('user.resident.photo', $photo);
+        $this->postJson('/api/login', ['login' => 'ana@gmail.com', 'password' => 'another123'])->assertOk();
+        $this->putJson('/api/profile', array_merge($info, ['remove_photo' => true]), $headers)->assertOk()->assertJsonPath('user.resident.photo', null);
+        $this->putJson('/api/profile', array_merge($info, ['photo' => 'data:text/html;base64,PGI+']), $headers)->assertStatus(422)->assertJsonValidationErrors(['photo']);
+
         // Staff and admin don't use this page.
         $this->getJson('/api/profile', $this->token(User::factory()->create()))->assertForbidden();
     }
