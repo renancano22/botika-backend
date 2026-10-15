@@ -21,14 +21,14 @@ class ResidentController extends Controller
             ->get();
     }
 
-    /** QR Code / Patient ID verification before dispensing. */
+    /** QR Code / Resident ID verification before dispensing. */
     public function lookup(Request $request)
     {
         $request->validate(['code' => 'required|string']);
 
         $resident = Resident::where('qr_code', trim($request->code))->first();
         if (! $resident) {
-            return response()->json(['message' => 'No resident found with that QR code / Patient ID.'], 404);
+            return response()->json(['message' => 'No resident found with that QR code / Resident ID.'], 404);
         }
 
         return [

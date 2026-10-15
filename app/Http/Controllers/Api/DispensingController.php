@@ -40,7 +40,7 @@ class DispensingController extends Controller
             ->get();
     }
 
-    /** Dispense an approved medicine request after the resident's QR code / Patient ID is verified. */
+    /** Dispense an approved medicine request after the resident's QR code / Resident ID is verified. */
     public function store(Request $request)
     {
         $data = $request->validate([
@@ -51,7 +51,7 @@ class DispensingController extends Controller
         $req = MedicineRequest::with(['items', 'resident'])->findOrFail($data['request_id']);
 
         if ($req->resident->qr_code !== trim($data['qr_code'])) {
-            return response()->json(['message' => 'QR code / Patient ID does not match the requesting resident.'], 422);
+            return response()->json(['message' => 'QR code / Resident ID does not match the requesting resident.'], 422);
         }
         if ($req->request_type !== 'medicine' || $req->status !== 'approved') {
             return response()->json(['message' => 'Only approved medicine requests can be dispensed.'], 422);

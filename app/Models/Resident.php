@@ -71,7 +71,7 @@ class Resident extends Model
         return ['barangay' => $barangay, 'address_line' => implode(', ', $parts)];
     }
 
-    /** Patient ID printed on / encoded in the resident's QR code, e.g. BBC-000001. */
+    /** Resident ID printed on / encoded in the resident's QR code, e.g. BBC-000001. */
     public static function makePatientId(int $residentId): string
     {
         return 'BBC-' . str_pad((string) $residentId, 6, '0', STR_PAD_LEFT);

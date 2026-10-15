@@ -126,7 +126,7 @@ class ReportController extends Controller
             ->map(fn (Dispensing $d) => [
                 'dispensing_id' => $d->dispensing_id,
                 'dispensed_at' => $d->dispensed_at->toDateTimeString(),
-                'patient_id' => $d->request->resident->qr_code,
+                'resident_id' => $d->request->resident->qr_code, // Resident ID (BBC-000001)
                 'resident' => $d->request->resident->name,
                 'medicines' => $d->items->map(fn ($i) => "{$i->medicine->medicine_name} x{$i->quantity}")->implode(', '),
                 'dispensed_by' => $d->dispenser?->name,

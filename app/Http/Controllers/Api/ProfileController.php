@@ -13,7 +13,7 @@ use Illuminate\Validation\ValidationException;
 
 /**
  * Resident "My Profile": view and edit their own information, profile picture and password.
- * The QR code / Patient ID is shown here too (it never changes).
+ * The QR code / Resident ID is shown here too (it never changes).
  */
 class ProfileController extends Controller
 {

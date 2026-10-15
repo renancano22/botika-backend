@@ -248,7 +248,7 @@ class BotikaFlowTest extends TestCase
             ->assertJsonPath('address_line', 'Purok 2')
             ->assertJsonPath('user.resident.qr_code', 'BBC-000001');
 
-        // Edit information (the Patient ID stays the same).
+        // Edit information (the Resident ID stays the same).
         $this->putJson('/api/profile', [
             'name' => 'Ana Dela Cruz', 'email' => 'Ana@Gmail.com', 'contact_no' => '0919 765 4321',
             'barangay' => 'Zone II Poblacion', 'address_line' => '',
