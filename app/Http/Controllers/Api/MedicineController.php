@@ -27,8 +27,7 @@ class MedicineController extends Controller
             ->withMax('inventory as last_stock_update', 'last_updated')
             ->when(! $isResident, fn ($q) => $q->with(['inventory' => fn ($b) => $b->where('quantity', '>', 0)->orderBy('expiration_date')]))
             ->when($request->search, fn ($q, $s) => $q->where(fn ($w) => $w
-                ->where('medicine_name', 'like', "%{$s}%")->orWhere('generic_name', 'like', "%{$s}%")->orWhere('category', 'like', "%{$s}%")
-                ->when(! $isResident, fn ($b) => $b->orWhereHas('inventory', fn ($i) => $i->where('batch_number', 'like', "%{$s}%")))))
+                ->where('medicine_name', 'like', "%{$s}%")->orWhere('generic_name', 'like', "%{$s}%")->orWhere('category', 'like', "%{$s}%")))
             ->when($request->category, fn ($q, $c) => $q->where('category', $c))
             ->orderBy('generic_name')->orderBy('medicine_name')
             ->get();
@@ -67,7 +66,6 @@ class MedicineController extends Controller
                     $exp = $b->expiration_date->toDateString();
                     return [
                         'inventory_id' => $b->inventory_id,
-                        'batch_number' => $b->batch_number,
                         'quantity' => $b->quantity,
                         'expiration_date' => $exp,
                         'expiry_status' => $exp <= $today ? 'expired' : ($exp <= $warnUntil ? 'near_expiry' : 'ok'),

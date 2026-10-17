@@ -52,7 +52,6 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
         Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
         Route::get('/notifications/{notification}', [NotificationController::class, 'show'])->whereNumber('notification');
 
-        Route::get('/monthly-limit', [RequestController::class, 'monthlyLimit']);
 
         Route::get('/profile', [ProfileController::class, 'show']);
         Route::put('/profile', [ProfileController::class, 'update']);

@@ -10,7 +10,6 @@ use App\Models\Resident;
 use App\Models\User;
 use App\Services\ForecastService;
 use App\Services\InventoryService;
-use App\Services\MonthlyLimit;
 use App\Services\SmsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -60,7 +59,6 @@ class DispensingController extends Controller
         if ($rx->isNotEmpty() && ! $request->boolean('prescription_checked')) {
             return response()->json(['message' => self::rxMessage($rx->implode(', '))], 422);
         }
-        app(MonthlyLimit::class)->check($req->resident_id, (int) $req->items->sum('quantity'), 'dispense', $req->request_id);
 
         return response()->json($this->dispense($req, $request->user(), $rx->isNotEmpty()), 201);
     }
@@ -79,7 +77,6 @@ class DispensingController extends Controller
         ]);
 
         $resident = Resident::where('qr_code', $data['qr_code'])->firstOrFail();
-        app(MonthlyLimit::class)->check($resident->resident_id, array_sum(array_map(fn ($i) => (int) $i['quantity'], $data['items'])), 'walk_in');
 
         $rx = Medicine::whereIn('medicine_id', array_column($data['items'], 'medicine_id'))->where('requires_prescription', true)->pluck('medicine_name');
         if ($rx->isNotEmpty() && ! $request->boolean('prescription_checked')) {

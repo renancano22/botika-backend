@@ -12,7 +12,7 @@ class Inventory extends Model
     const CREATED_AT = null;
     const UPDATED_AT = 'last_updated';
 
-    protected $fillable = ['medicine_id', 'batch_number', 'quantity', 'expiration_date'];
+    protected $fillable = ['medicine_id', 'quantity', 'expiration_date'];
     protected $casts = ['expiration_date' => 'date:Y-m-d', 'last_updated' => 'datetime', 'quantity' => 'integer'];
 
     public function medicine(): BelongsTo

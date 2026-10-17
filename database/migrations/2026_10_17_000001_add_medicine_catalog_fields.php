@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Schema;
  * Medicine inventory fields for the Botika ng Bayan medicine list:
  *  - medicines: generic name, strength, dosage form, date last updated, and stock_verified_at
  *    (set when staff record stock or confirm there is none; until then the stock is "not recorded");
- *  - inventory batches: batch / lot number.
  * Then the Botika's medicine list is added (records only, no stock).
  */
 return new class extends Migration
@@ -23,9 +22,6 @@ return new class extends Migration
             $table->string('dosage_form', 50)->nullable()->after('strength');
             $table->timestamp('stock_verified_at')->nullable()->after('reorder_level');
             $table->timestamp('updated_at')->nullable()->after('created_at');
-        });
-        Schema::table('inventory', function (Blueprint $table) {
-            $table->string('batch_number', 60)->nullable()->after('medicine_id');
         });
 
         // Existing medicines: the name so far is the generic name; tablets and capsules get their dosage form.
@@ -47,7 +43,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::table('inventory', fn (Blueprint $table) => $table->dropColumn('batch_number'));
         Schema::table('medicines', fn (Blueprint $table) => $table->dropColumn(['generic_name', 'strength', 'dosage_form', 'stock_verified_at', 'updated_at']));
     }
 };

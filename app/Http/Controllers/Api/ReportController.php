@@ -115,7 +115,7 @@ class ReportController extends Controller
                     'available_stock' => $m->stockRecorded() ? $available : null,
                     'reorder_level' => $m->reorder_level,
                     'status' => $m->status($available),
-                    'batches' => $m->inventory->map(fn ($b) => ($b->batch_number ?: 'Lot not recorded') . " ({$b->quantity}, exp {$b->expiration_date->toDateString()})")->implode('; '),
+                    'batches' => $m->inventory->map(fn ($b) => "{$b->quantity} {$m->unit}, exp {$b->expiration_date->toDateString()}")->implode('; '),
                     'near_expiry_qty' => (int) $valid->filter(fn ($b) => $b->expiration_date->toDateString() <= $warnUntil)->sum('quantity'),
                     'expired_qty' => (int) $m->inventory->filter(fn ($b) => $b->expiration_date->toDateString() <= $today)->sum('quantity'),
                     'nearest_expiry' => optional($valid->sortBy('expiration_date')->first())->expiration_date?->toDateString(),

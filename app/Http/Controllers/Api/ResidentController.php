@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Dispensing;
 use App\Models\Resident;
-use App\Services\MonthlyLimit;
 use Illuminate\Http\Request;
 
 class ResidentController extends Controller
@@ -33,8 +32,6 @@ class ResidentController extends Controller
 
         return [
             'resident' => $resident,
-            // Monthly limit: how much this resident has received / has set aside this month.
-            'monthly' => app(MonthlyLimit::class)->usage($resident->resident_id),
             'approved_requests' => $resident->requests()
                 ->with(['items.medicine', 'prescription', 'prescriptionVerifier:user_id,name'])
                 ->where('request_type', 'medicine')

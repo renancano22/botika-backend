@@ -536,7 +536,7 @@ class BotikaFlowTest extends TestCase
         $this->getJson("/api/requests/{$first}", $this->token($staff))->assertOk()->assertJsonPath('status', 'approved');
     }
 
-    public function test_monthly_limit_of_100_and_walk_in_limit_of_30(): void
+    public function test_walk_in_limit_of_30_and_no_monthly_limit(): void
     {
         $staff = User::factory()->create();
         $a = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
@@ -555,29 +555,17 @@ class BotikaFlowTest extends TestCase
 
         // Walk-in: at most 30 per medicine.
         $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 31]])->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
-        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 30], ['medicine_id' => $b->medicine_id, 'quantity' => 30]])->assertCreated(); // 60 received
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 30], ['medicine_id' => $b->medicine_id, 'quantity' => 30]])->assertCreated();
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 30], ['medicine_id' => $b->medicine_id, 'quantity' => 30]])->assertCreated(); // 120 this month
 
-        // Online requests count too: 60 received + 30 pending = 90, so only 10 more.
+        // No monthly limit: requests and approvals are not limited by what was received this month.
         $first = $ask($a->medicine_id, 30)->assertCreated()->json('request_id');
-        $ask($b->medicine_id, 20)->assertStatus(422)->assertJsonValidationErrors('monthly_limit');
-        $second = $ask($b->medicine_id, 10)->assertCreated()->json('request_id');
-        $this->getJson('/api/monthly-limit', $this->token($resident))->assertOk()
-            ->assertJsonPath('limit', 100)->assertJsonPath('claimed', 60)->assertJsonPath('pending', 40)->assertJsonPath('remaining', 0);
-
-        // Approving sets the medicine aside; a walk-in cannot go over the limit either.
-        $this->postJson("/api/requests/{$first}/approve", [], $this->token($staff))->assertOk();       // 60 + 30 = 90
-        $walkIn([['medicine_id' => $b->medicine_id, 'quantity' => 15]])->assertStatus(422)->assertJsonValidationErrors('monthly_limit');
-        $walkIn([['medicine_id' => $b->medicine_id, 'quantity' => 10]])->assertCreated();               // 70 received + 30 set aside = 100
-        $this->postJson("/api/requests/{$second}/approve", [], $this->token($staff))->assertStatus(422)->assertJsonValidationErrors('monthly_limit');
-        $this->getJson('/api/residents/lookup?code=' . $qr, $this->token($staff))->assertOk()
-            ->assertJsonPath('monthly.claimed', 70)->assertJsonPath('monthly.set_aside', 30)->assertJsonPath('monthly.remaining', 0);
-        $this->postJson('/api/dispensing', ['request_id' => $first, 'qr_code' => $qr], $this->token($staff))->assertCreated(); // exactly 100
-
-        // Next month the limit starts again (the pending request still counts as asked for).
-        $this->travelTo(now()->startOfMonth()->addMonthNoOverflow()->addDay());
-        $this->getJson('/api/monthly-limit', $this->token($resident))->assertOk()
-            ->assertJsonPath('claimed', 0)->assertJsonPath('pending', 10)->assertJsonPath('remaining', 90);
+        $second = $ask($b->medicine_id, 30)->assertCreated()->json('request_id');
+        $this->postJson("/api/requests/{$first}/approve", [], $this->token($staff))->assertOk();
         $this->postJson("/api/requests/{$second}/approve", [], $this->token($staff))->assertOk();
+        $this->postJson('/api/dispensing', ['request_id' => $first, 'qr_code' => $qr], $this->token($staff))->assertCreated();
+        $this->getJson('/api/monthly-limit', $this->token($resident))->assertNotFound();
+        $this->getJson('/api/residents/lookup?code=' . $qr, $this->token($staff))->assertOk()->assertJsonMissingPath('monthly');
     }
 
     public function test_one_open_restock_request_per_medicine(): void
@@ -823,16 +811,16 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $lactulose['medicine_id'], 'quantity' => 1]]], $headers)->assertStatus(422);
         $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $lactulose['medicine_id'], 'quantity' => 1]]], $headers)->assertCreated();
 
-        // Staff confirm there is none (out of stock) or record a stock-in with its batch / lot number.
+        // Staff confirm there is none (out of stock) or record a stock-in.
         $this->postJson("/api/medicines/{$lactulose['medicine_id']}/confirm-no-stock", [], $this->token($staff))->assertOk();
         $this->postJson("/api/medicines/{$old->medicine_id}/confirm-no-stock", [], $this->token($staff))->assertStatus(422);
         $budesonide = Medicine::where('medicine_name', 'Budesonide Nebule')->firstOrFail();
-        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $budesonide->medicine_id, 'batch_number' => ' BN-2026-01 ', 'quantity' => 50,
-            'expiration_date' => now()->addYear()->toDateString()], $this->token($staff))->assertCreated()->assertJsonPath('batch_number', 'BN-2026-01');
+        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $budesonide->medicine_id, 'quantity' => 50,
+            'expiration_date' => now()->addYear()->toDateString()], $this->token($staff))->assertCreated();
         $list = collect($this->getJson('/api/medicines', $this->token($staff))->json())->keyBy('medicine_name');
         $this->assertSame('out_of_stock', $list['Lactulose Syrup']['status']);
         $this->assertSame('available', $list['Budesonide Nebule']['status']);
-        $this->assertSame('BN-2026-01', $list['Budesonide Nebule']['batches'][0]['batch_number']);
+        $this->assertSame(50, $list['Budesonide Nebule']['batches'][0]['quantity']);
         $this->assertNotNull($list['Budesonide Nebule']['last_updated']);
         $this->assertGreaterThan(0, $this->getJson('/api/dashboard', $this->token($staff))->json('counts.unrecorded'));
 

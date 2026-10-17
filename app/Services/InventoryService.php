@@ -67,11 +67,10 @@ class InventoryService
     }
 
     /** Stock-in: records a new batch, logs it, then checks if waiting restock requests can now be fulfilled. */
-    public function stockIn(int $medicineId, int $quantity, string $expirationDate, ?int $userId = null, ?string $batchNumber = null): Inventory
+    public function stockIn(int $medicineId, int $quantity, string $expirationDate, ?int $userId = null): Inventory
     {
         $batch = Inventory::create([
             'medicine_id' => $medicineId,
-            'batch_number' => $batchNumber,
             'quantity' => $quantity,
             'expiration_date' => $expirationDate,
         ]);
