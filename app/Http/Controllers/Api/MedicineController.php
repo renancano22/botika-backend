@@ -107,7 +107,7 @@ class MedicineController extends Controller
     public function confirmNoStock(Medicine $medicine, InventoryService $inventory)
     {
         if ($inventory->availableStock($medicine->medicine_id) > 0) {
-            return response()->json(['message' => 'This medicine has stock recorded in Inventory.'], 422);
+            return response()->json(['message' => 'This medicine has stock recorded in Stock & Batches.'], 422);
         }
         $medicine->update(['stock_verified_at' => now()]);
         return $medicine;

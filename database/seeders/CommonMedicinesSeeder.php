@@ -7,7 +7,7 @@ use Illuminate\Database\Seeder;
 
 /**
  * Adds a starter list of common Botika ng Bayan medicines (records only, NO stock).
- * Stock is added through Inventory > Stock-in with the real quantity and expiry date.
+ * Stock is added through Stock & Batches > Stock-in with the real quantity and expiry date.
  *
  *     php artisan db:seed --class=CommonMedicinesSeeder
  *
@@ -54,6 +54,6 @@ class CommonMedicinesSeeder extends Seeder
             $added++;
         }
 
-        $this->command?->info("{$added} medicine(s) added. Add their stock in Inventory > Stock-in.");
+        $this->command?->info("{$added} medicine(s) added. Add their stock in Stock & Batches > Stock-in.");
     }
 }

@@ -16,6 +16,6 @@ class BotikaMedicineListSeeder extends Seeder
     public function run(): void
     {
         $r = MedicineCatalog::import();
-        $this->command?->info("{$r['added']} medicine(s) added, {$r['matched']} already in the system updated. Record their stock in Inventory > Stock-in.");
+        $this->command?->info("{$r['added']} medicine(s) added, {$r['matched']} already in the system updated. Record their stock in Stock & Batches > Stock-in.");
     }
 }
