@@ -46,6 +46,7 @@ class DashboardController extends Controller
                 'pending_restock' => MedicineRequest::where('request_type', 'restock')->where('status', 'pending')->count(),
                 'dispensed_today' => Dispensing::whereDate('dispensed_at', $today)->count(),
                 'residents' => Resident::count(),
+                'staff' => User::where('role', User::ROLE_STAFF)->where('is_active', true)->count(), // active pharmacy staff
             ],
             'alerts' => $alerts,
             'recent_requests' => MedicineRequest::with(['items.medicine:medicine_id,medicine_name', 'resident:resident_id,name'])
@@ -62,7 +63,6 @@ class DashboardController extends Controller
         ];
 
         if ($user->role === User::ROLE_ADMIN) {
-            $data['counts']['staff'] = User::where('role', User::ROLE_STAFF)->where('is_active', true)->count();
             $data['top_medicines'] = DispensingItem::query()
                 ->join('dispensing', 'dispensing.dispensing_id', '=', 'dispensing_items.dispensing_id')
                 ->join('medicines', 'medicines.medicine_id', '=', 'dispensing_items.medicine_id')
