@@ -6,6 +6,7 @@ use App\Models\Inventory;
 use App\Models\Medicine;
 use App\Models\User;
 use App\Services\ForecastService;
+use App\Support\MedicineCatalog;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -778,5 +779,71 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/forecasts/generate', ['months' => 6, 'horizon' => 3], $this->token($admin))->assertOk();
         $this->assertSame(2 * 3 * 3, \App\Models\Forecast::count());
         $this->assertEqualsWithDelta(10, \App\Models\Forecast::where('medicine_id', $para->medicine_id)->where('method', 'linear_regression')->value('predicted_demand'), 0.01);
+    }
+
+    public function test_botika_medicine_list_and_unrecorded_stock(): void
+    {
+        $staff = User::factory()->create();
+        // Added by hand before the list: it keeps its stock and history when the list is imported.
+        $old = Medicine::create(['medicine_name' => 'Amoxicillin 500mg', 'category' => 'Antibiotic', 'unit' => 'capsule', 'reorder_level' => 10]);
+        Inventory::create(['medicine_id' => $old->medicine_id, 'quantity' => 30, 'expiration_date' => now()->addYear()->toDateString()]);
+        $other = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic / Antipyretic', 'unit' => 'tablet', 'reorder_level' => 10]);
+
+        $total = count(MedicineCatalog::items());
+        $this->assertSame(['added' => $total - 1, 'matched' => 1], MedicineCatalog::import());
+        $this->assertSame(['added' => 0, 'matched' => $total], MedicineCatalog::import()); // safe to run again
+
+        $old->refresh();
+        $this->assertSame('Amoxicillin 500mg Capsule', $old->medicine_name);
+        $this->assertSame('Antibacterial', $old->category);
+        $this->assertSame('Analgesic/Antipyretic', $other->fresh()->category); // not in the list: kept, category renamed
+        $this->assertDatabaseHas('medicines', ['medicine_name' => 'Ferrous Sulfate + Folic Acid', 'strength' => null, 'dosage_form' => null, 'unit' => 'piece']);
+        $this->assertDatabaseHas('medicines', ['medicine_name' => 'Dicycloverine 10mg Tablet', 'category' => 'Gastro']);
+        $this->assertDatabaseHas('medicines', ['medicine_name' => 'Atorvastatin 80mg Tablet', 'category' => 'Antihyperlipidemia', 'requires_prescription' => true]);
+        $this->assertDatabaseMissing('medicines', ['generic_name' => 'Paracetamol', 'strength' => '250mg/5ml']); // on hold
+        $this->assertSame(1, Inventory::count()); // no stock, batch or expiry date is made up
+
+        $list = collect($this->getJson('/api/medicines', $this->token($staff))->assertOk()->json())->keyBy('medicine_name');
+        $this->assertSame('available', $list['Amoxicillin 500mg Capsule']['status']);
+        $lactulose = $list['Lactulose Syrup'];
+        $this->assertSame('unrecorded', $lactulose['status']);
+        $this->assertFalse($lactulose['stock_recorded']);
+        $this->assertSame('bottle', $lactulose['unit']);
+        $this->assertSame([], $lactulose['batches']);
+        $this->assertSame('unrecorded', $list['Paracetamol 500mg']['status']);
+        $this->assertSame(['MED-' . str_pad((string) $lactulose['medicine_id'], 4, '0', STR_PAD_LEFT)], [$lactulose['medicine_code']]);
+        $this->assertCount(18, array_intersect(MedicineCatalog::CATEGORIES, $this->getJson('/api/medicines/categories', $this->token($staff))->json()));
+
+        // Residents can't request a medicine whose stock is not recorded, but can ask for a restock.
+        $headers = ['Authorization' => 'Bearer ' . $this->postJson('/api/register', [
+            'name' => 'Maria Santos', 'email' => 'maria@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09171234567',
+        ])->assertCreated()->json('token')];
+        $this->getJson('/api/medicines', $headers)->assertOk()->assertJsonFragment(['medicine_name' => 'Lactulose Syrup', 'status' => 'unrecorded', 'available_stock' => 0]);
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $lactulose['medicine_id'], 'quantity' => 1]]], $headers)->assertStatus(422);
+        $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $lactulose['medicine_id'], 'quantity' => 1]]], $headers)->assertCreated();
+
+        // Staff confirm there is none (out of stock) or record a stock-in with its batch / lot number.
+        $this->postJson("/api/medicines/{$lactulose['medicine_id']}/confirm-no-stock", [], $this->token($staff))->assertOk();
+        $this->postJson("/api/medicines/{$old->medicine_id}/confirm-no-stock", [], $this->token($staff))->assertStatus(422);
+        $budesonide = Medicine::where('medicine_name', 'Budesonide Nebule')->firstOrFail();
+        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $budesonide->medicine_id, 'batch_number' => ' BN-2026-01 ', 'quantity' => 50,
+            'expiration_date' => now()->addYear()->toDateString()], $this->token($staff))->assertCreated()->assertJsonPath('batch_number', 'BN-2026-01');
+        $list = collect($this->getJson('/api/medicines', $this->token($staff))->json())->keyBy('medicine_name');
+        $this->assertSame('out_of_stock', $list['Lactulose Syrup']['status']);
+        $this->assertSame('available', $list['Budesonide Nebule']['status']);
+        $this->assertSame('BN-2026-01', $list['Budesonide Nebule']['batches'][0]['batch_number']);
+        $this->assertNotNull($list['Budesonide Nebule']['last_updated']);
+        $this->assertGreaterThan(0, $this->getJson('/api/dashboard', $this->token($staff))->json('counts.unrecorded'));
+
+        // Add / edit: name = generic name + strength + dosage form, no duplicates.
+        $this->postJson('/api/medicines', ['generic_name' => 'Irbesartan', 'strength' => '150mg', 'category' => 'Antihypertensives', 'unit' => 'tablet', 'reorder_level' => 20], $this->token($staff))
+            ->assertStatus(422)->assertJsonValidationErrors('generic_name');
+        $this->postJson('/api/medicines', ['generic_name' => 'Zinc', 'dosage_form' => 'Powder', 'category' => 'Vitamins/Supplements', 'unit' => 'sachet', 'reorder_level' => 20], $this->token($staff))
+            ->assertStatus(422)->assertJsonValidationErrors('dosage_form');
+        $irbesartan = Medicine::where('medicine_name', 'Irbesartan 150mg')->firstOrFail();
+        $this->putJson("/api/medicines/{$irbesartan->medicine_id}", ['generic_name' => 'Irbesartan', 'strength' => '150mg', 'dosage_form' => 'Tablet',
+            'category' => 'Antihypertensives', 'unit' => 'tablet', 'reorder_level' => 20, 'requires_prescription' => true], $this->token($staff))
+            ->assertOk()->assertJsonPath('medicine_name', 'Irbesartan 150mg Tablet');
     }
 }

@@ -67,13 +67,16 @@ class InventoryService
     }
 
     /** Stock-in: records a new batch, logs it, then checks if waiting restock requests can now be fulfilled. */
-    public function stockIn(int $medicineId, int $quantity, string $expirationDate, ?int $userId = null): Inventory
+    public function stockIn(int $medicineId, int $quantity, string $expirationDate, ?int $userId = null, ?string $batchNumber = null): Inventory
     {
         $batch = Inventory::create([
             'medicine_id' => $medicineId,
+            'batch_number' => $batchNumber,
             'quantity' => $quantity,
             'expiration_date' => $expirationDate,
         ]);
+        // The medicine's stock is now recorded (it is no longer "not recorded").
+        Medicine::whereKey($medicineId)->whereNull('stock_verified_at')->update(['stock_verified_at' => now()]);
 
         $this->log($batch, 'stock_in', $quantity, $userId, 'New batch received');
         $this->fulfillRestockRequests($medicineId);
@@ -143,7 +146,7 @@ class InventoryService
         $today = now()->toDateString();
         $warnUntil = self::nearExpiryCutoff();
 
-        $lowStock = Medicine::withAvailableStock()->get()
+        $statuses = Medicine::withAvailableStock()->get()
             ->map(function (Medicine $m) {
                 $available = (int) ($m->available_stock ?? 0);
                 return [
@@ -152,11 +155,12 @@ class InventoryService
                     'unit' => $m->unit,
                     'available_stock' => $available,
                     'reorder_level' => $m->reorder_level,
-                    'status' => Medicine::stockStatus($available, $m->reorder_level),
+                    'status' => $m->status($available),
                 ];
-            })
-            ->filter(fn ($m) => $m['status'] !== 'available')
-            ->values();
+            });
+        $lowStock = $statuses->whereIn('status', ['low_stock', 'out_of_stock'])->values();
+        // Stock never recorded: staff still have to count it (stock-in) or confirm there is none.
+        $unrecorded = $statuses->where('status', 'unrecorded')->values();
 
         $nearExpiry = Inventory::with('medicine:medicine_id,medicine_name,unit')
             ->where('quantity', '>', 0)
@@ -171,6 +175,7 @@ class InventoryService
 
         return [
             'low_stock' => $lowStock,
+            'unrecorded' => $unrecorded,
             'near_expiry' => $nearExpiry,
             'expired' => $expired,
         ];

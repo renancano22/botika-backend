@@ -19,10 +19,11 @@ class InventoryController extends Controller
         $today = now()->toDateString();
         $warnUntil = InventoryService::nearExpiryCutoff();
 
-        return Inventory::with('medicine:medicine_id,medicine_name,category,unit')
+        return Inventory::with('medicine:medicine_id,medicine_name,generic_name,strength,dosage_form,category,unit')
             ->when($request->medicine_id, fn ($q, $id) => $q->where('medicine_id', $id))
             ->when(! $request->boolean('include_empty'), fn ($q) => $q->where('quantity', '>', 0))
-            ->when($request->search, fn ($q, $s) => $q->whereHas('medicine', fn ($m) => $m->where('medicine_name', 'like', "%{$s}%")))
+            ->when($request->search, fn ($q, $s) => $q->where(fn ($w) => $w->where('batch_number', 'like', "%{$s}%")
+                ->orWhereHas('medicine', fn ($m) => $m->where('medicine_name', 'like', "%{$s}%"))))
             ->orderBy('expiration_date')
             ->get()
             ->map(function (Inventory $b) use ($today, $warnUntil) {
@@ -36,12 +37,14 @@ class InventoryController extends Controller
     {
         $data = $request->validate([
             'medicine_id' => 'required|exists:medicines,medicine_id',
+            'batch_number' => 'nullable|string|max:60',
             'quantity' => 'required|integer|min:1',
             'expiration_date' => 'required|date|after:today',
         ]);
+        $batchNumber = trim((string) ($data['batch_number'] ?? '')) ?: null;
 
         $batch = DB::transaction(fn () => $this->inventory->stockIn(
-            (int) $data['medicine_id'], (int) $data['quantity'], $data['expiration_date'], $request->user()->user_id
+            (int) $data['medicine_id'], (int) $data['quantity'], $data['expiration_date'], $request->user()->user_id, $batchNumber
         ));
 
         return response()->json($batch->load('medicine'), 201);
@@ -68,7 +71,7 @@ class InventoryController extends Controller
             'to' => 'nullable|date',
         ]);
 
-        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name'])
+        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,batch_number,expiration_date', 'performer:user_id,name'])
             ->when($request->type, fn ($q, $t) => $q->where('type', $t))
             ->when($request->medicine_id, fn ($q, $id) => $q->where('medicine_id', $id))
             ->when($request->from, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))

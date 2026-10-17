@@ -99,17 +99,23 @@ class ReportController extends Controller
         $warnUntil = InventoryService::nearExpiryCutoff();
 
         return Medicine::with(['inventory' => fn ($q) => $q->where('quantity', '>', 0)])
-            ->orderBy('medicine_name')->get()
+            ->withExists('inventory as has_batches')
+            ->orderBy('category')->orderBy('medicine_name')->get()
             ->map(function (Medicine $m) use ($today, $warnUntil) {
                 $valid = $m->inventory->filter(fn ($b) => $b->expiration_date->toDateString() > $today);
                 $available = (int) $valid->sum('quantity');
                 return [
-                    'medicine_name' => $m->medicine_name,
+                    'medicine_id' => $m->code(),
+                    'generic_name' => $m->generic_name,
+                    'strength' => $m->strength,
+                    'dosage_form' => $m->dosage_form,
                     'category' => $m->category,
                     'unit' => $m->unit,
-                    'available_stock' => $available,
+                    // stock not recorded yet: shown as "unrecorded", not as 0 / out of stock
+                    'available_stock' => $m->stockRecorded() ? $available : null,
                     'reorder_level' => $m->reorder_level,
-                    'status' => Medicine::stockStatus($available, $m->reorder_level),
+                    'status' => $m->status($available),
+                    'batches' => $m->inventory->map(fn ($b) => ($b->batch_number ?: 'Lot not recorded') . " ({$b->quantity}, exp {$b->expiration_date->toDateString()})")->implode('; '),
                     'near_expiry_qty' => (int) $valid->filter(fn ($b) => $b->expiration_date->toDateString() <= $warnUntil)->sum('quantity'),
                     'expired_qty' => (int) $m->inventory->filter(fn ($b) => $b->expiration_date->toDateString() <= $today)->sum('quantity'),
                     'nearest_expiry' => optional($valid->sortBy('expiration_date')->first())->expiration_date?->toDateString(),

@@ -38,6 +38,7 @@ class DashboardController extends Controller
                 'medicines' => Medicine::count(),
                 'low_stock' => collect($alerts['low_stock'])->where('status', 'low_stock')->count(),
                 'out_of_stock' => collect($alerts['low_stock'])->where('status', 'out_of_stock')->count(),
+                'unrecorded' => collect($alerts['unrecorded'])->count(), // stock not recorded yet
                 'near_expiry' => $alerts['near_expiry']->count(),
                 'expired' => $alerts['expired']->count(),
                 'pending_requests' => MedicineRequest::where('request_type', 'medicine')->where('status', 'pending')->count(),

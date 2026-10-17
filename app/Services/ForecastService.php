@@ -405,6 +405,7 @@ class ForecastService
                 'best_method' => $best,
                 'available_stock' => (int) ($m->available_stock ?? 0),
                 'reorder_level' => (int) $m->reorder_level,
+                'stock_recorded' => $m->stockRecorded(),
             ];
         }
 
@@ -451,7 +452,8 @@ class ForecastService
         $predicted = $chosen === null ? 0 : (int) ceil(round($chosen['predicted_demand'], 2));
         $available = $row['available_stock'];
         // Enough to cover the predicted demand of the forecast period and stay above the reorder level.
-        $restock = max(0, $predicted + $row['reorder_level'] - $available);
+        // When the stock was never recorded there is nothing to compare with, so no restock is suggested.
+        $restock = $row['stock_recorded'] ? max(0, $predicted + $row['reorder_level'] - $available) : 0;
 
         return $row + [
             'forecast' => $forecastKeys ? array_combine($forecastKeys, $monthly) : [],
