@@ -891,4 +891,42 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/inventory/stock-in', $stockIn, $this->token($staff))->assertCreated();
         $this->assertDatabaseCount('inventory', 3);
     }
+
+    public function test_staff_register_a_walk_in_resident_without_cellphone_and_dispense_with_stock_out(): void
+    {
+        $staff = User::factory()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $batch = Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 50, 'expiration_date' => now()->addYear()->toDateString()]);
+        $walkIn = ['name' => 'Lola  Remedios Bañez', 'barangay' => 'Zone I Poblacion', 'address_line' => 'Purok 2'];
+
+        // Residents cannot register other residents.
+        $resident = $this->postJson('/api/register', ['name' => 'Ana Reyes', 'email' => 'ana@gmail.com', 'password' => 'secret123',
+            'password_confirmation' => 'secret123', 'barangay' => 'Zone I Poblacion', 'contact_no' => '09175556666'])->assertCreated();
+        $this->postJson('/api/residents', $walkIn, ['Authorization' => 'Bearer ' . $resident->json('token')])->assertForbidden();
+
+        // No mobile number: still registered, with a Resident ID and no login account.
+        $res = $this->postJson('/api/residents', $walkIn, $this->token($staff))->assertCreated()
+            ->assertJsonPath('resident.name', 'Lola Remedios Bañez')
+            ->assertJsonPath('resident.contact_no', null)
+            ->assertJsonPath('resident.address', 'Purok 2, Zone I Poblacion, Bulan, Sorsogon');
+        $qr = $res->json('resident.qr_code');
+        $this->assertDatabaseHas('residents', ['qr_code' => $qr, 'user_id' => null]);
+
+        // Same name in the same barangay must be looked up first (no accidental duplicate).
+        $this->postJson('/api/residents', $walkIn, $this->token($staff))->assertStatus(409)->assertJsonPath('matches.0.qr_code', $qr);
+        $this->postJson('/api/residents', [...$walkIn, 'confirm_new' => true], $this->token($staff))->assertCreated();
+        // A mobile number already used by another resident is refused.
+        $this->postJson('/api/residents', ['name' => 'Pedro Cruz', 'barangay' => 'Zone I Poblacion', 'contact_no' => '0917 555 6666'], $this->token($staff))
+            ->assertStatus(422)->assertJsonValidationErrors('contact_no');
+
+        // The medicine given is recorded and taken out of the inventory.
+        $this->postJson('/api/dispensing/walk-in', ['qr_code' => $qr, 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 10]]], $this->token($staff))
+            ->assertCreated();
+        $this->assertSame(40, $batch->fresh()->quantity);
+        $this->assertDatabaseHas('stock_transactions', ['inventory_id' => $batch->inventory_id, 'type' => 'dispensed', 'quantity' => 10]);
+        // No cellphone: the dispensing message is kept in the log, not sent by SMS.
+        $this->assertDatabaseHas('notifications', ['type' => 'dispensed', 'channel' => 'none', 'status' => 'logged']);
+        // Found again later by name.
+        $this->getJson('/api/residents/search?name=remedios', $this->token($staff))->assertOk()->assertJsonPath('results.0.qr_code', $qr);
+    }
 }

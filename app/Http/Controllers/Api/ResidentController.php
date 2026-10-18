@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Dispensing;
 use App\Models\Resident;
+use App\Support\Rules;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class ResidentController extends Controller
@@ -19,6 +21,57 @@ class ResidentController extends Controller
                 ->orWhere('contact_no', 'like', "%{$s}%")))
             ->orderBy('name')
             ->get();
+    }
+
+    /**
+     * Walk-in resident registered by the staff at the Botika ng Bayan (e.g. no cellphone, no account).
+     * The record has no login; the mobile number is optional. It gets a Resident ID like any resident,
+     * so the medicines given are recorded (walk-in dispensing) and taken out of the inventory.
+     */
+    public function store(Request $request)
+    {
+        $request->merge([
+            'name' => trim(preg_replace('/\s+/', ' ', (string) $request->input('name'))),
+            'contact_no' => $request->filled('contact_no') ? Resident::normalizePhone($request->input('contact_no')) : null,
+        ]);
+
+        $data = $request->validate([
+            'name' => Rules::name(),
+            'barangay' => Rules::barangay(),
+            'address_line' => ['nullable', 'string', 'max:120'],
+            'contact_no' => ['nullable', 'string', 'regex:/^09\d{9}$/', 'unique:residents,contact_no'],
+        ], Rules::messages() + [
+            'contact_no.regex' => 'Enter a valid mobile number, e.g. 09171234567, or leave it blank.',
+            'contact_no.unique' => 'This mobile number is already registered to another resident. Search for that resident instead.',
+        ]);
+
+        // Same name in the same barangay: probably already registered. The staff must look first.
+        if (! $request->boolean('confirm_new')) {
+            $same = Resident::whereRaw('LOWER(name) = ?', [mb_strtolower($data['name'])])->get(['resident_id', 'name', 'qr_code', 'address'])
+                ->map(fn (Resident $r) => ['resident_id' => $r->resident_id, 'name' => $r->name, 'qr_code' => $r->qr_code,
+                    'barangay' => Resident::splitAddress($r->address)['barangay']])
+                ->where('barangay', $data['barangay'])->values();
+            if ($same->isNotEmpty()) {
+                return response()->json([
+                    'message' => 'A resident with this name is already registered in this barangay.',
+                    'matches' => $same,
+                ], 409);
+            }
+        }
+
+        $resident = DB::transaction(function () use ($data) {
+            $resident = Resident::create([
+                'user_id' => null,
+                'name' => $data['name'],
+                'address' => Resident::composeAddress($data['address_line'] ?? null, $data['barangay']),
+                'contact_no' => $data['contact_no'] ?? null,
+                'qr_code' => 'TEMP-' . uniqid(),
+            ]);
+            $resident->update(['qr_code' => Resident::makePatientId($resident->resident_id)]);
+            return $resident;
+        });
+
+        return response()->json($this->dispensingRecord($resident->fresh()), 201);
     }
 
     /** QR Code / Resident ID verification before dispensing. */

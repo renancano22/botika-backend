@@ -18,6 +18,20 @@ class SmsService
      */
     public function notify(Resident $resident, string $message, ?int $requestId = null, string $type = 'announcement'): Notification
     {
+        // Residents registered at the Botika without a cellphone: nothing to send, the message is only logged.
+        if (blank($resident->contact_no)) {
+            Log::info("[SMS not sent - resident {$resident->qr_code} has no mobile number]: {$message}");
+            return Notification::create([
+                'resident_id' => $resident->resident_id,
+                'request_id' => $requestId,
+                'type' => $type,
+                'message' => $message,
+                'channel' => 'none',
+                'status' => 'logged',
+                'sent_at' => now(),
+            ]);
+        }
+
         $status = $this->send($resident->contact_no, $message);
 
         return Notification::create([
