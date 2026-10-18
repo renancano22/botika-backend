@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Inventory;
+use App\Models\Medicine;
 use App\Models\StockTransaction;
 use App\Services\InventoryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /** Real-time tracking of medicine stocks and expiration dates (Objective 3.1). */
 class InventoryController extends Controller
@@ -40,9 +42,30 @@ class InventoryController extends Controller
             'expiration_date' => 'required|date|after:today',
         ]);
 
-        $batch = DB::transaction(fn () => $this->inventory->stockIn(
-            (int) $data['medicine_id'], (int) $data['quantity'], $data['expiration_date'], $request->user()->user_id
-        ));
+        $batch = DB::transaction(function () use ($data, $request) {
+            // One stock-in at a time per medicine, so a double click / resent request cannot slip in twice.
+            Medicine::whereKey($data['medicine_id'])->lockForUpdate()->first();
+
+            // The same stock-in (same medicine, quantity and expiration date, same staff) saved seconds ago
+            // is a duplicate submission, not a second delivery.
+            $duplicate = StockTransaction::where('type', 'stock_in')
+                ->where('medicine_id', $data['medicine_id'])
+                ->where('quantity', $data['quantity'])
+                ->where('performed_by', $request->user()->user_id)
+                ->where('created_at', '>=', now()->subSeconds(30))
+                ->whereHas('batch', fn ($q) => $q->whereDate('expiration_date', $data['expiration_date']))
+                ->latest('transaction_id')
+                ->first();
+            if ($duplicate) {
+                throw ValidationException::withMessages([
+                    'medicine_id' => "This stock-in was already saved a moment ago (Batch #{$duplicate->inventory_id}), so it was not recorded twice.",
+                ]);
+            }
+
+            return $this->inventory->stockIn(
+                (int) $data['medicine_id'], (int) $data['quantity'], $data['expiration_date'], $request->user()->user_id
+            );
+        });
 
         return response()->json($batch->load('medicine'), 201);
     }

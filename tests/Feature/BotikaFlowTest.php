@@ -865,4 +865,25 @@ class BotikaFlowTest extends TestCase
         $this->postJson("/api/residents/{$residentId}/verify", ['identity_confirmed' => true], $this->token($staff))
             ->assertOk()->assertJsonPath('resident.qr_code', 'BBC-000001')->assertJsonStructure(['approved_requests', 'dispensing_history']);
     }
+
+    public function test_a_double_submitted_stock_in_is_saved_only_once(): void
+    {
+        $staff = User::factory()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Losartan 50mg', 'category' => 'Antihypertensives', 'unit' => 'tablet', 'reorder_level' => 20]);
+        $stockIn = ['medicine_id' => $medicine->medicine_id, 'quantity' => 305, 'expiration_date' => now()->addYear()->toDateString()];
+
+        $first = $this->postJson('/api/inventory/stock-in', $stockIn, $this->token($staff))->assertCreated();
+        $this->postJson('/api/inventory/stock-in', $stockIn, $this->token($staff))
+            ->assertStatus(422)->assertJsonValidationErrors('medicine_id');
+        $this->assertDatabaseCount('inventory', 1);
+        $this->assertDatabaseCount('stock_transactions', 1);
+        $this->assertSame($first->json('inventory_id'), Inventory::first()->inventory_id);
+
+        // A different delivery (other expiration date) is still recorded right away.
+        $this->postJson('/api/inventory/stock-in', [...$stockIn, 'expiration_date' => now()->addYears(2)->toDateString()], $this->token($staff))->assertCreated();
+        // The same delivery entered again later is allowed (e.g. a second box received afterwards).
+        $this->travel(1)->minutes();
+        $this->postJson('/api/inventory/stock-in', $stockIn, $this->token($staff))->assertCreated();
+        $this->assertDatabaseCount('inventory', 3);
+    }
 }
