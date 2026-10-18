@@ -7,7 +7,6 @@ use App\Models\Dispensing;
 use App\Models\Resident;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class ResidentController extends Controller
 {
@@ -76,25 +75,16 @@ class ResidentController extends Controller
 
     /**
      * Confirms the identity of a resident picked from the name search. Picking a name is not enough:
-     * the resident must state their registered mobile number and the staff confirm they followed the
-     * Botika's identity check. Only then is the resident's dispensing record returned.
+     * the staff must confirm they checked the resident's identity in person (the Botika's identity check).
+     * Only then is the resident's dispensing record returned.
      */
     public function verify(Request $request, Resident $resident)
     {
         $request->validate([
-            'contact_no' => ['required', 'string', 'max:20'],
             'identity_confirmed' => ['accepted'],
         ], [
-            'contact_no.required' => 'Ask the resident for their registered mobile number.',
             'identity_confirmed.accepted' => 'Confirm that you checked the resident\'s identity.',
         ]);
-
-        $given = Resident::normalizePhone($request->contact_no);
-        if ($given === '' || $given !== Resident::normalizePhone($resident->contact_no)) {
-            throw ValidationException::withMessages([
-                'contact_no' => 'This mobile number does not match the one registered for this resident. Do not dispense — check the resident\'s identity again.',
-            ]);
-        }
 
         return $this->dispensingRecord($resident);
     }

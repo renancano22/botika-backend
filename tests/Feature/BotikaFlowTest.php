@@ -857,12 +857,12 @@ class BotikaFlowTest extends TestCase
         $this->getJson('/api/residents/search?name=j', $this->token($staff))->assertStatus(422);
         $this->getJson('/api/residents/search?name=' . urlencode('%_%'), $this->token($staff))->assertStatus(422);
 
-        // Picking a name is not enough: the registered mobile number and the staff's identity check are required.
-        $this->postJson("/api/residents/{$residentId}/verify", ['contact_no' => '09173334444', 'identity_confirmed' => true], $this->token($staff))
-            ->assertStatus(422)->assertJsonValidationErrors('contact_no');
-        $this->postJson("/api/residents/{$residentId}/verify", ['contact_no' => '09171112222'], $this->token($staff))
+        // Picking a name is not enough: the staff must confirm they checked the resident's identity.
+        $this->postJson("/api/residents/{$residentId}/verify", [], $this->token($staff))
             ->assertStatus(422)->assertJsonValidationErrors('identity_confirmed');
-        $this->postJson("/api/residents/{$residentId}/verify", ['contact_no' => '+63 917 111 2222', 'identity_confirmed' => true], $this->token($staff))
+        $this->postJson("/api/residents/{$residentId}/verify", ['identity_confirmed' => true], ['Authorization' => 'Bearer ' . $juan->json('token')])
+            ->assertForbidden();
+        $this->postJson("/api/residents/{$residentId}/verify", ['identity_confirmed' => true], $this->token($staff))
             ->assertOk()->assertJsonPath('resident.qr_code', 'BBC-000001')->assertJsonStructure(['approved_requests', 'dispensing_history']);
     }
 }
