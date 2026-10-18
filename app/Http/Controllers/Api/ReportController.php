@@ -161,7 +161,7 @@ class ReportController extends Controller
     {
         $labels = ['stock_in' => 'Stock-in', 'stock_out' => 'Stock-out', 'dispensed' => 'Dispensed'];
 
-        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name'])
+        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name', ...StockTransaction::REASON_RELATIONS])
             ->whereDate('created_at', '>=', $from)
             ->whereDate('created_at', '<=', $to)
             ->orderByDesc('created_at')
@@ -174,7 +174,7 @@ class ReportController extends Controller
                 'quantity' => ($t->type === 'stock_in' ? '+' : '-') . $t->quantity . ' ' . ($t->medicine?->unit ?? ''),
                 'batch_no' => $t->inventory_id,
                 'batch_expiry' => $t->batch?->expiration_date?->toDateString(),
-                'reason' => $t->reason ?? ($t->dispensing_id ? "Dispensing #{$t->dispensing_id}" : null),
+                'reason' => $t->reasonText(),
                 'performed_by' => $t->performer?->name,
             ])->all();
     }

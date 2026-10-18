@@ -912,9 +912,16 @@ class BotikaFlowTest extends TestCase
         $qr = $res->json('resident.qr_code');
         $this->assertDatabaseHas('residents', ['qr_code' => $qr, 'user_id' => null]);
 
-        // Same name in the same barangay must be looked up first (no accidental duplicate).
-        $this->postJson('/api/residents', $walkIn, $this->token($staff))->assertStatus(409)->assertJsonPath('matches.0.qr_code', $qr);
-        $this->postJson('/api/residents', [...$walkIn, 'confirm_new' => true], $this->token($staff))->assertCreated();
+        // The same name in the same barangay is never registered twice (not even when confirmed).
+        $this->postJson('/api/residents', [...$walkIn, 'name' => 'lola remedios  bañez'], $this->token($staff))
+            ->assertStatus(409)->assertJsonPath('blocked', true)->assertJsonPath('matches.0.qr_code', $qr);
+        $this->postJson('/api/residents', [...$walkIn, 'confirm_new' => true], $this->token($staff))->assertStatus(409);
+        // A similar name (middle initial) is shown first; a different person can be registered after checking.
+        $similar = [...$walkIn, 'name' => 'Lola Remedios C. Bañez'];
+        $this->postJson('/api/residents', $similar, $this->token($staff))->assertStatus(409)->assertJsonPath('blocked', false);
+        $this->postJson('/api/residents', [...$similar, 'confirm_new' => true], $this->token($staff))->assertCreated();
+        // The same name in another barangay is a different resident.
+        $this->postJson('/api/residents', [...$walkIn, 'barangay' => 'Zone II Poblacion'], $this->token($staff))->assertCreated();
         // A mobile number already used by another resident is refused.
         $this->postJson('/api/residents', ['name' => 'Pedro Cruz', 'barangay' => 'Zone I Poblacion', 'contact_no' => '0917 555 6666'], $this->token($staff))
             ->assertStatus(422)->assertJsonValidationErrors('contact_no');
@@ -924,6 +931,9 @@ class BotikaFlowTest extends TestCase
             ->assertCreated();
         $this->assertSame(40, $batch->fresh()->quantity);
         $this->assertDatabaseHas('stock_transactions', ['inventory_id' => $batch->inventory_id, 'type' => 'dispensed', 'quantity' => 10]);
+        // The stock history says who received it.
+        $this->getJson('/api/inventory/transactions?type=dispensed', $this->token($staff))->assertOk()
+            ->assertJsonPath('0.reason_text', "Walk-in: dispensed to Lola Remedios Bañez ({$qr})");
         // No cellphone: the dispensing message is kept in the log, not sent by SMS.
         $this->assertDatabaseHas('notifications', ['type' => 'dispensed', 'channel' => 'none', 'status' => 'logged']);
         // Found again later by name.

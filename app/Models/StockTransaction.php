@@ -27,4 +27,33 @@ class StockTransaction extends Model
     {
         return $this->belongsTo(User::class, 'performed_by', 'user_id');
     }
+
+    public function dispensing(): BelongsTo
+    {
+        return $this->belongsTo(Dispensing::class, 'dispensing_id', 'dispensing_id');
+    }
+
+    /** Relations needed by reasonText() (load them to avoid one query per row). */
+    public const REASON_RELATIONS = ['dispensing:dispensing_id,request_id', 'dispensing.request:request_id,resident_id,remarks', 'dispensing.request.resident:resident_id,name,qr_code'];
+
+    /**
+     * The reason shown in the stock history. Medicine given to a resident reads e.g.
+     * "Dispensed to Juan Dela Cruz (BBC-000004) · Request No. 47" or "Walk-in: dispensed to …".
+     */
+    public function reasonText(): ?string
+    {
+        if ($this->type !== 'dispensed') {
+            return $this->reason;
+        }
+        $request = $this->dispensing?->request;
+        $resident = $request?->resident;
+        if (! $resident) {
+            return $this->reason ?? 'Dispensed to a resident';
+        }
+        $who = "{$resident->name} ({$resident->qr_code})";
+
+        return $request->remarks === 'Walk-in'
+            ? "Walk-in: dispensed to {$who}"
+            : "Dispensed to {$who} · Request No. {$request->request_id}";
+    }
 }

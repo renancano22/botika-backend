@@ -91,7 +91,7 @@ class InventoryController extends Controller
             'to' => 'nullable|date',
         ]);
 
-        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name'])
+        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name', ...StockTransaction::REASON_RELATIONS])
             ->when($request->type, fn ($q, $t) => $q->where('type', $t))
             ->when($request->medicine_id, fn ($q, $id) => $q->where('medicine_id', $id))
             ->when($request->from, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))
@@ -99,7 +99,11 @@ class InventoryController extends Controller
             ->orderByDesc('created_at')
             ->orderByDesc('transaction_id')
             ->limit(500)
-            ->get();
+            ->get()
+            ->each(function (StockTransaction $t) {
+                $t->setAttribute('reason_text', $t->reasonText());
+                $t->unsetRelation('dispensing'); // only the text is needed (keeps the list light)
+            });
     }
 
     public function alerts()
