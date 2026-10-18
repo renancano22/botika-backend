@@ -78,7 +78,7 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
 
         Route::get('/residents', [ResidentController::class, 'index']);
         Route::get('/residents/lookup', [ResidentController::class, 'lookup']);
-        Route::get('/residents/search', [ResidentController::class, 'search'])->middleware('throttle:30,1');
+        Route::get('/residents/search', [ResidentController::class, 'search'])->middleware('throttle:120,1'); // results update while staff type
         Route::post('/residents/{resident}/verify', [ResidentController::class, 'verify'])->whereNumber('resident')->middleware('throttle:10,1');
 
         Route::post('/dispensing', [DispensingController::class, 'store']);
