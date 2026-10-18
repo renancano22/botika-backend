@@ -834,4 +834,35 @@ class BotikaFlowTest extends TestCase
             'category' => 'Antihypertensives', 'unit' => 'tablet', 'reorder_level' => 20, 'requires_prescription' => true], $this->token($staff))
             ->assertOk()->assertJsonPath('medicine_name', 'Irbesartan 150mg Tablet');
     }
+
+    public function test_staff_find_a_resident_by_name_and_must_verify_identity_before_dispensing(): void
+    {
+        $staff = User::factory()->create();
+        $register = fn (string $name, string $email, string $barangay, string $mobile) => $this->postJson('/api/register', [
+            'name' => $name, 'email' => $email, 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => $barangay, 'contact_no' => $mobile,
+        ])->assertCreated();
+        $juan = $register('Juan Dela Cruz', 'juan@gmail.com', 'Zone I Poblacion', '09171112222');
+        $register('Juan Dela Cruz', 'juan2@gmail.com', 'Zone II Poblacion', '09173334444'); // same name, other barangay
+        $register('Ana Reyes', 'ana@gmail.com', 'Zone I Poblacion', '09175556666');
+        $residentId = $juan->json('user.resident.resident_id');
+
+        // Only staff can search, and the results carry no mobile number or address.
+        $this->getJson('/api/residents/search?name=juan', ['Authorization' => 'Bearer ' . $juan->json('token')])->assertForbidden();
+        $res = $this->getJson('/api/residents/search?name=juan%20cruz', $this->token($staff))->assertOk()->assertJsonPath('total', 2);
+        $this->assertSame(['resident_id', 'name', 'qr_code', 'barangay'], array_keys($res->json('results.0')));
+        $this->getJson('/api/residents/search?name=juan&barangay=Zone%20I%20Poblacion', $this->token($staff))
+            ->assertOk()->assertJsonPath('total', 1)->assertJsonPath('results.0.qr_code', 'BBC-000001');
+        $this->getJson('/api/residents/search?name=pedro', $this->token($staff))->assertOk()->assertJsonPath('total', 0);
+        $this->getJson('/api/residents/search?name=j', $this->token($staff))->assertStatus(422);
+        $this->getJson('/api/residents/search?name=' . urlencode('%_%'), $this->token($staff))->assertStatus(422);
+
+        // Picking a name is not enough: the registered mobile number and the staff's identity check are required.
+        $this->postJson("/api/residents/{$residentId}/verify", ['contact_no' => '09173334444', 'identity_confirmed' => true], $this->token($staff))
+            ->assertStatus(422)->assertJsonValidationErrors('contact_no');
+        $this->postJson("/api/residents/{$residentId}/verify", ['contact_no' => '09171112222'], $this->token($staff))
+            ->assertStatus(422)->assertJsonValidationErrors('identity_confirmed');
+        $this->postJson("/api/residents/{$residentId}/verify", ['contact_no' => '+63 917 111 2222', 'identity_confirmed' => true], $this->token($staff))
+            ->assertOk()->assertJsonPath('resident.qr_code', 'BBC-000001')->assertJsonStructure(['approved_requests', 'dispensing_history']);
+    }
 }

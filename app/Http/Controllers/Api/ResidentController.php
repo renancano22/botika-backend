@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Dispensing;
 use App\Models\Resident;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class ResidentController extends Controller
 {
@@ -30,6 +32,76 @@ class ResidentController extends Controller
             return response()->json(['message' => 'No resident found with that QR code / Resident ID.'], 404);
         }
 
+        return $this->dispensingRecord($resident);
+    }
+
+    /**
+     * "Forgot Resident ID or QR code?": find a resident by registered full name, optionally narrowed by barangay.
+     * Returns only what is needed to pick the right person (name, Resident ID, barangay) — no mobile number or address.
+     */
+    public function search(Request $request)
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'min:2', 'max:100', "regex:/^[\pL\s.'\-]+$/u"],
+            'barangay' => ['nullable', 'string', Rule::in(config('botika.barangays'))],
+        ], [
+            'name.min' => 'Type at least 2 letters of the resident\'s name.',
+            'name.regex' => 'The name can only have letters, spaces, periods, apostrophes and hyphens.',
+            'barangay.in' => 'Choose a barangay from the list.',
+        ]);
+
+        // Every word typed must be part of the registered name ("juan cruz" finds "Juan Dela Cruz").
+        $words = preg_split('/\s+/', trim($data['name']), -1, PREG_SPLIT_NO_EMPTY);
+        $matches = Resident::query()
+            ->where(function ($q) use ($words) {
+                foreach ($words as $word) {
+                    $q->where('name', 'like', '%' . addcslashes($word, '%_\\') . '%');
+                }
+            })
+            ->when($data['barangay'] ?? null, fn ($q, $b) => $q->where('address', 'like', '%' . addcslashes($b, '%_\\') . ', Bulan%'))
+            ->orderBy('name')
+            ->limit(100)
+            ->get(['resident_id', 'name', 'qr_code', 'address'])
+            ->map(fn (Resident $r) => [
+                'resident_id' => $r->resident_id,
+                'name' => $r->name,
+                'qr_code' => $r->qr_code,
+                'barangay' => Resident::splitAddress($r->address)['barangay'],
+            ])
+            ->when($data['barangay'] ?? null, fn ($c, $b) => $c->where('barangay', $b))
+            ->values();
+
+        return ['results' => $matches->take(20)->values(), 'total' => $matches->count()];
+    }
+
+    /**
+     * Confirms the identity of a resident picked from the name search. Picking a name is not enough:
+     * the resident must state their registered mobile number and the staff confirm they followed the
+     * Botika's identity check. Only then is the resident's dispensing record returned.
+     */
+    public function verify(Request $request, Resident $resident)
+    {
+        $request->validate([
+            'contact_no' => ['required', 'string', 'max:20'],
+            'identity_confirmed' => ['accepted'],
+        ], [
+            'contact_no.required' => 'Ask the resident for their registered mobile number.',
+            'identity_confirmed.accepted' => 'Confirm that you checked the resident\'s identity.',
+        ]);
+
+        $given = Resident::normalizePhone($request->contact_no);
+        if ($given === '' || $given !== Resident::normalizePhone($resident->contact_no)) {
+            throw ValidationException::withMessages([
+                'contact_no' => 'This mobile number does not match the one registered for this resident. Do not dispense — check the resident\'s identity again.',
+            ]);
+        }
+
+        return $this->dispensingRecord($resident);
+    }
+
+    /** The verified resident, their approved medicine requests and their recent dispensing history. */
+    private function dispensingRecord(Resident $resident): array
+    {
         return [
             'resident' => $resident,
             'approved_requests' => $resident->requests()
