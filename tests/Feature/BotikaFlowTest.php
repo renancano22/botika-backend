@@ -857,6 +857,11 @@ class BotikaFlowTest extends TestCase
         $this->getJson('/api/residents/search?name=j', $this->token($staff))->assertStatus(422);
         $this->getJson('/api/residents/search?name=' . urlencode('%_%'), $this->token($staff))->assertStatus(422);
 
+        // Many searches while typing do not block confirming the identity afterwards.
+        foreach (range(1, 15) as $i) {
+            $this->getJson('/api/residents/search?name=juan', $this->token($staff))->assertOk();
+        }
+
         // Picking a name is not enough: the staff must confirm they checked the resident's identity.
         $this->postJson("/api/residents/{$residentId}/verify", [], $this->token($staff))
             ->assertStatus(422)->assertJsonValidationErrors('identity_confirmed');

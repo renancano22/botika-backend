@@ -78,8 +78,9 @@ Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(funct
 
         Route::get('/residents', [ResidentController::class, 'index']);
         Route::get('/residents/lookup', [ResidentController::class, 'lookup']);
-        Route::get('/residents/search', [ResidentController::class, 'search'])->middleware('throttle:120,1'); // results update while staff type
-        Route::post('/residents/{resident}/verify', [ResidentController::class, 'verify'])->whereNumber('resident')->middleware('throttle:10,1');
+        // Own limit (see AppServiceProvider), so the searches made while typing do not use up other limits.
+        Route::get('/residents/search', [ResidentController::class, 'search'])->middleware('throttle:resident-search');
+        Route::post('/residents/{resident}/verify', [ResidentController::class, 'verify'])->whereNumber('resident');
 
         Route::post('/dispensing', [DispensingController::class, 'store']);
         Route::post('/dispensing/walk-in', [DispensingController::class, 'walkIn']);
