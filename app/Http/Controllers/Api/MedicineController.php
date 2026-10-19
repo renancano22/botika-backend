@@ -47,7 +47,6 @@ class MedicineController extends Controller
                 'dosage_form' => $m->dosage_form,
                 'category' => $m->category,
                 'unit' => $m->unit,
-                'description' => $m->description,
                 'requires_prescription' => (bool) $m->requires_prescription,
                 // Residents only see what they can still request (stock not reserved for approved requests).
                 'available_stock' => $isResident ? $free : $onShelf,
@@ -141,7 +140,6 @@ class MedicineController extends Controller
             'dosage_form' => ['nullable', Rule::in(array_keys(MedicineCatalog::DOSAGE_FORMS))],
             'category' => 'required|string|max:100',
             'unit' => 'required|string|max:50',
-            'description' => 'nullable|string',
             'requires_prescription' => 'boolean',
             'reorder_level' => 'required|integer|min:0',
         ], [
