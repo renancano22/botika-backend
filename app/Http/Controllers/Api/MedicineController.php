@@ -135,16 +135,23 @@ class MedicineController extends Controller
             'dosage_form' => $request->filled('dosage_form') ? $request->input('dosage_form') : null,
         ]);
         $data = $request->validate([
-            'generic_name' => 'required|string|max:150',
-            'strength' => 'nullable|string|max:50',
+            'generic_name' => ['required', 'string', 'min:2', 'max:150', "regex:/^[\pL\pN][\pL\pN\s.,'()\/+\-]*$/u"],
+            'strength' => ['nullable', 'string', 'max:50', 'regex:/^[\pN][\pL\pN\s.,\/%+\-]*$/u'],
             'dosage_form' => ['nullable', Rule::in(array_keys(MedicineCatalog::DOSAGE_FORMS))],
-            'category' => 'required|string|max:100',
-            'unit' => 'required|string|max:50',
+            'category' => ['required', 'string', 'max:100', Rule::in($this->categories())],
+            'unit' => ['required', 'string', 'max:50', "regex:/^[\pL][\pL\s\-]*$/u"],
             'requires_prescription' => 'boolean',
-            'reorder_level' => 'required|integer|min:0',
+            'reorder_level' => 'required|integer|min:0|max:100000',
         ], [
             'generic_name.required' => 'Enter the generic name.',
+            'generic_name.min' => 'The generic name must have at least 2 characters.',
+            'generic_name.regex' => 'The generic name can only have letters, numbers, spaces and . , \' ( ) / + -',
+            'strength.regex' => 'Enter the strength starting with a number, e.g. 500mg, 100mg/5ml or 1%.',
             'dosage_form.in' => 'Choose a dosage form from the list.',
+            'category.in' => 'Choose a category from the list.',
+            'unit.regex' => 'The unit can only have letters, e.g. tablet, capsule, bottle.',
+            'reorder_level.integer' => 'The reorder level must be a whole number.',
+            'reorder_level.max' => 'The reorder level can be at most 100,000.',
         ]);
 
         $name = MedicineCatalog::displayName($data['generic_name'], $data['strength'] ?? null, $data['dosage_form'] ?? null);

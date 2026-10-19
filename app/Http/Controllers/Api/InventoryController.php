@@ -38,8 +38,16 @@ class InventoryController extends Controller
     {
         $data = $request->validate([
             'medicine_id' => 'required|exists:medicines,medicine_id',
-            'quantity' => 'required|integer|min:1',
-            'expiration_date' => 'required|date|after:today',
+            'quantity' => 'required|integer|min:1|max:100000',
+            'expiration_date' => ['required', 'date', 'after:today', 'before_or_equal:' . now()->addYears(10)->toDateString()],
+        ], [
+            'medicine_id.required' => 'Choose a medicine.',
+            'medicine_id.exists' => 'This medicine is not in the medicine list.',
+            'quantity.min' => 'The quantity must be at least 1.',
+            'quantity.max' => 'A single stock-in can be at most 100,000.',
+            'quantity.integer' => 'The quantity must be a whole number.',
+            'expiration_date.after' => 'The expiration date must be after today. Expired medicine cannot be added to the stock.',
+            'expiration_date.before_or_equal' => 'Check the expiration date: it cannot be more than 10 years from today.',
         ]);
 
         $batch = DB::transaction(function () use ($data, $request) {
@@ -74,7 +82,12 @@ class InventoryController extends Controller
     {
         $data = $request->validate([
             'quantity' => 'required|integer|min:1',
-            'reason' => 'required|string|max:255',
+            'reason' => 'required|string|min:3|max:255',
+        ], [
+            'quantity.min' => 'The quantity must be at least 1.',
+            'quantity.integer' => 'The quantity must be a whole number.',
+            'reason.required' => 'Choose or type the reason for the stock-out.',
+            'reason.min' => 'Please describe the reason (at least 3 characters).',
         ]);
 
         return DB::transaction(fn () => $this->inventory
@@ -88,8 +101,9 @@ class InventoryController extends Controller
         $request->validate([
             'type' => 'nullable|in:stock_in,stock_out,dispensed',
             'from' => 'nullable|date',
-            'to' => 'nullable|date',
-        ]);
+            'to' => 'nullable|date|after_or_equal:from',
+            'medicine_id' => 'nullable|integer',
+        ], ['to.after_or_equal' => 'The end date must be on or after the start date.']);
 
         return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name', ...StockTransaction::REASON_RELATIONS])
             ->when($request->type, fn ($q, $t) => $q->where('type', $t))

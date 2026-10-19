@@ -85,9 +85,13 @@ class NotificationController extends Controller
     {
         $data = $request->validate([
             'category' => 'nullable|in:general,closure,hours,distribution',
-            'message' => 'required|string|max:300',
+            'message' => 'required|string|min:5|max:300',
             'resident_ids' => 'nullable|array',
             'resident_ids.*' => 'exists:residents,resident_id',
+        ], [
+            'message.required' => 'Type the announcement message.',
+            'message.min' => 'The message is too short (at least 5 characters).',
+            'message.max' => 'Keep the message within 300 characters.',
         ]);
 
         $residents = empty($data['resident_ids'])

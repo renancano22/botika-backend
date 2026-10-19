@@ -44,7 +44,7 @@ class DispensingController extends Controller
     {
         $data = $request->validate([
             'request_id' => 'required|exists:requests,request_id',
-            'qr_code' => 'required|string',
+            'qr_code' => 'required|string|max:50',
         ]);
 
         $req = MedicineRequest::with(['items', 'resident'])->findOrFail($data['request_id']);
@@ -68,12 +68,16 @@ class DispensingController extends Controller
     {
         $data = $request->validate([
             'qr_code' => 'required|exists:residents,qr_code',
-            'items' => 'required|array|min:1',
+            'items' => 'required|array|min:1|max:20',
             'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
             'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_request_quantity'),
         ], [
             'items.*.quantity.max' => 'At most :max can be given per medicine.',
             'items.*.medicine_id.distinct' => 'This medicine is already in the list.',
+            'items.*.medicine_id.required' => 'Choose a medicine for each row.',
+            'items.required' => 'Add at least one medicine.',
+            'items.max' => 'At most 20 medicines can be dispensed at once.',
+            'qr_code.exists' => 'No resident found with this Resident ID.',
         ]);
 
         $resident = Resident::where('qr_code', $data['qr_code'])->firstOrFail();

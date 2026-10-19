@@ -939,4 +939,36 @@ class BotikaFlowTest extends TestCase
         // Found again later by name.
         $this->getJson('/api/residents/search?name=remedios', $this->token($staff))->assertOk()->assertJsonPath('results.0.qr_code', $qr);
     }
+
+    public function test_forms_reject_invalid_input(): void
+    {
+        $staff = User::factory()->create();
+        $h = $this->token($staff);
+        $medicine = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesics', 'unit' => 'tablet', 'reorder_level' => 5]);
+        $valid = ['generic_name' => 'Cetirizine', 'strength' => '10mg', 'dosage_form' => 'Tablet', 'category' => 'Antihistamine', 'unit' => 'tablet', 'reorder_level' => 20];
+
+        // Medicine form
+        $this->postJson('/api/medicines', [...$valid, 'generic_name' => '<b>x</b>'], $h)->assertStatus(422)->assertJsonValidationErrors('generic_name');
+        $this->postJson('/api/medicines', [...$valid, 'strength' => 'mg10'], $h)->assertStatus(422)->assertJsonValidationErrors('strength');
+        $this->postJson('/api/medicines', [...$valid, 'category' => 'Made Up Category'], $h)->assertStatus(422)->assertJsonValidationErrors('category');
+        $this->postJson('/api/medicines', [...$valid, 'unit' => '123'], $h)->assertStatus(422)->assertJsonValidationErrors('unit');
+        $this->postJson('/api/medicines', [...$valid, 'reorder_level' => -1], $h)->assertStatus(422)->assertJsonValidationErrors('reorder_level');
+        $this->postJson('/api/medicines', $valid, $h)->assertCreated()->assertJsonPath('medicine_name', 'Cetirizine 10mg Tablet');
+
+        // Stock-in / stock-out
+        $in = ['medicine_id' => $medicine->medicine_id, 'quantity' => 10, 'expiration_date' => now()->addYear()->toDateString()];
+        $this->postJson('/api/inventory/stock-in', [...$in, 'quantity' => 0], $h)->assertStatus(422)->assertJsonValidationErrors('quantity');
+        $this->postJson('/api/inventory/stock-in', [...$in, 'quantity' => 100001], $h)->assertStatus(422)->assertJsonValidationErrors('quantity');
+        $this->postJson('/api/inventory/stock-in', [...$in, 'expiration_date' => now()->toDateString()], $h)->assertStatus(422)->assertJsonValidationErrors('expiration_date');
+        $this->postJson('/api/inventory/stock-in', [...$in, 'expiration_date' => now()->addYears(11)->toDateString()], $h)->assertStatus(422)->assertJsonValidationErrors('expiration_date');
+        $batch = $this->postJson('/api/inventory/stock-in', $in, $h)->assertCreated()->json('inventory_id');
+        $this->postJson("/api/inventory/{$batch}/stock-out", ['quantity' => 11, 'reason' => 'Damaged'], $h)->assertStatus(422);
+        $this->postJson("/api/inventory/{$batch}/stock-out", ['quantity' => 1, 'reason' => 'x'], $h)->assertStatus(422)->assertJsonValidationErrors('reason');
+        $this->getJson('/api/inventory/transactions?from=2026-10-10&to=2026-10-01', $h)->assertStatus(422)->assertJsonValidationErrors('to');
+
+        // Announcement
+        $admin = User::factory()->admin()->create();
+        $this->postJson('/api/notifications/announce', ['message' => 'Hi'], $this->token($admin))->assertStatus(422)->assertJsonValidationErrors('message');
+        $this->postJson('/api/notifications/announce', ['message' => str_repeat('a', 301)], $this->token($admin))->assertStatus(422)->assertJsonValidationErrors('message');
+    }
 }

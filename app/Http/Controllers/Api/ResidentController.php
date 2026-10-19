@@ -109,7 +109,7 @@ class ResidentController extends Controller
     /** QR Code / Resident ID verification before dispensing. */
     public function lookup(Request $request)
     {
-        $request->validate(['code' => 'required|string']);
+        $request->validate(['code' => 'required|string|max:50'], ['code.required' => 'Enter or scan the Resident ID.']);
 
         $resident = Resident::where('qr_code', trim($request->code))->first();
         if (! $resident) {

@@ -216,7 +216,10 @@ class RequestController extends Controller
     public function reject(Request $request, MedicineRequest $medicineRequest)
     {
         $this->authorizeReviewer($request, $medicineRequest);
-        $data = $request->validate(['remarks' => 'required|string|max:255']);
+        $data = $request->validate(['remarks' => 'required|string|min:3|max:255'], [
+            'remarks.required' => 'Give the reason for rejecting the request.',
+            'remarks.min' => 'Please describe the reason (at least 3 characters).',
+        ]);
 
         $medicineRequest->update([
             'status' => 'rejected',
@@ -241,7 +244,7 @@ class RequestController extends Controller
     private function validateItems(Request $request, bool $withType): array
     {
         $rules = [
-            'items' => 'required|array|min:1',
+            'items' => 'required|array|min:1|max:20',
             'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
             'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_request_quantity'),
         ];
@@ -254,6 +257,9 @@ class RequestController extends Controller
             'items.*.quantity.min' => 'The quantity must be at least 1.',
             'items.*.quantity.integer' => 'The quantity must be a whole number.',
             'items.*.medicine_id.distinct' => 'This medicine is already in your request.',
+            'items.required' => 'Add at least one medicine.',
+            'items.min' => 'Add at least one medicine.',
+            'items.max' => 'One request can have at most 20 medicines.',
         ]);
         $data['items'] = array_map(fn ($i) => [
             'medicine_id' => (int) $i['medicine_id'],

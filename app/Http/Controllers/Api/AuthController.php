@@ -70,7 +70,7 @@ class AuthController extends Controller
     {
         $data = $request->validate([
             'login' => 'required|string|max:255',
-            'password' => 'required|string',
+            'password' => 'required|string|max:255',
         ], [
             'login.required' => 'Enter your email or mobile number.',
         ]);
