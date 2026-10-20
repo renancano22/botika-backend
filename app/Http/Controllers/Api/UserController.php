@@ -28,9 +28,9 @@ class UserController extends Controller
         $data = $request->validate([
             'name' => Rules::name(),
             'email' => [...Rules::gmail(), 'unique:users,email'],
-            'password' => Rules::password(),
+            'password' => [...Rules::password(), 'confirmed'],
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF])],
-        ], Rules::messages());
+        ], Rules::messages() + ['password.confirmed' => 'The password and its confirmation do not match.']);
 
         return response()->json(User::create([
             'name' => $data['name'],
@@ -50,9 +50,9 @@ class UserController extends Controller
             'name' => Rules::name(),
             // Residents may have no email (they log in with their mobile number); staff and admin need one.
             'email' => [...Rules::gmail($user->role !== User::ROLE_RESIDENT), Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
-            'password' => Rules::password(false),
+            'password' => [...Rules::password(false), 'confirmed'],
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF, User::ROLE_RESIDENT])],
-        ], Rules::messages());
+        ], Rules::messages() + ['password.confirmed' => 'The new password and its confirmation do not match.']);
 
         // A resident account must stay a resident (it is linked to a resident profile).
         if ($user->role === User::ROLE_RESIDENT && $data['role'] !== User::ROLE_RESIDENT) {

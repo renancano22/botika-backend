@@ -114,6 +114,12 @@ class BotikaFlowTest extends TestCase
         $this->deleteJson("/api/medicines/{$medicine->medicine_id}", [], $this->token($admin))->assertStatus(422);
         $this->deleteJson("/api/medicines/{$unused->medicine_id}", [], $this->token($admin))->assertNoContent();
 
+        // New accounts need the password typed twice.
+        $newStaff = ['name' => 'Rosa Lim', 'email' => 'rosa.lim@gmail.com', 'password' => 'secret123', 'role' => 'staff'];
+        $this->postJson('/api/users', $newStaff + ['password_confirmation' => 'secret124'], $this->token($admin))
+            ->assertStatus(422)->assertJsonValidationErrors('password');
+        $this->postJson('/api/users', $newStaff + ['password_confirmation' => 'secret123'], $this->token($admin))->assertCreated();
+
         $this->putJson("/api/users/{$admin->user_id}", ['name' => $admin->name, 'email' => $admin->email, 'role' => 'staff'], $this->token($admin))
             ->assertStatus(422);
     }
