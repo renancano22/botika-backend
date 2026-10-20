@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Rules\NotGuessablePassword;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 
@@ -22,10 +23,13 @@ class Rules
         return [$required ? 'required' : 'nullable', 'string', 'email', 'max:255', 'regex:' . self::GMAIL_REGEX];
     }
 
-    /** At least 8 characters with at least one letter and one number. */
-    public static function password(bool $required = true): array
+    /**
+     * The password policy used everywhere a password is chosen: at least 8 characters with a letter and a
+     * number, not a common password, and without the person's own details ($personal: name, email, mobile).
+     */
+    public static function password(bool $required = true, array $personal = []): array
     {
-        return [$required ? 'required' : 'nullable', 'string', 'max:100', Password::min(8)->letters()->numbers()];
+        return [$required ? 'required' : 'nullable', 'string', 'max:100', Password::min(8)->letters()->numbers(), new NotGuessablePassword($personal)];
     }
 
     public static function barangay(): array

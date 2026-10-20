@@ -26,7 +26,7 @@ class AuthController extends Controller
         $data = $request->validate([
             'name' => Rules::name(),
             'email' => [...Rules::gmail(false), 'unique:users,email'],
-            'password' => [...Rules::password(), 'confirmed'],
+            'password' => [...Rules::password(true, [$request->input('name'), $request->input('email'), $request->input('contact_no')]), 'confirmed'],
             'barangay' => Rules::barangay(),
             'address_line' => ['nullable', 'string', 'max:120'],
             'contact_no' => ['required', 'string', 'regex:/^09\d{9}$/', 'unique:residents,contact_no'],
@@ -82,6 +82,9 @@ class AuthController extends Controller
         }
         if (! $user->is_active) {
             throw ValidationException::withMessages(['login' => 'This account has been deactivated. Please contact the administrator.']);
+        }
+        if ($user->temporaryPasswordExpired()) {
+            throw ValidationException::withMessages(['login' => 'Your temporary password has expired. Please ask the administrator to set a new one.']);
         }
 
         return response()->json([

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DispensingController;
@@ -14,6 +15,7 @@ use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RequestController;
 use App\Http\Controllers\Api\ResidentController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Middleware\EnsurePasswordChanged;
 use App\Http\Middleware\ExpireUnclaimedRequests;
 use Illuminate\Support\Facades\Route;
 
@@ -27,12 +29,13 @@ Route::post('/forgot-password', [PasswordResetController::class, 'sendCode'])->m
 Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 Route::get('/barangays', fn () => config('botika.barangays'));
 
-Route::middleware(['auth:sanctum', ExpireUnclaimedRequests::class])->group(function () use ($medicineList) {
+Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimedRequests::class])->group(function () use ($medicineList) {
 
     // ---- All roles
     Route::middleware('role:admin,staff,resident')->group(function () use ($medicineList) {
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/logout', [AuthController::class, 'logout']);
+        Route::post('/account/password', [AccountController::class, 'changePassword']);
         Route::get('/dashboard', DashboardController::class);
 
         // The medicine list is also used by Stock & Batches and Dispensing (staff) and by the request form (residents).

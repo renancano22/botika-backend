@@ -60,10 +60,11 @@ class PasswordResetController extends Controller
 
     public function reset(Request $request)
     {
+        $account = User::findByLogin((string) $request->input('login'));
         $data = $request->validate([
             'login' => 'required|string|max:255',
             'code' => 'required|digits:6',
-            'password' => [...Rules::password(), 'confirmed'],
+            'password' => [...Rules::password(true, [$account?->name, $account?->email, $account?->resident?->contact_no]), 'confirmed'],
         ], [
             'code.digits' => 'The code has 6 digits.',
         ]);
@@ -87,7 +88,7 @@ class PasswordResetController extends Controller
             ]);
         }
 
-        $user->password_hash = $data['password'];
+        $user->setOwnPassword($data['password']); // they chose this password themselves
         $user->save();
         DB::table('password_reset_codes')->where('user_id', $user->user_id)->delete();
         $user->tokens()->delete(); // log out every device that used the old password

@@ -8,6 +8,10 @@ return [
     // Approved medicine requests not claimed within this many days are cancelled automatically,
     // so the medicine set aside for them goes back to the available stock.
     'unclaimed_days' => (int) env('BOTIKA_UNCLAIMED_DAYS', 7),
+
+    // A temporary default password set by the administrator stops working after this many days
+    // if the user has not logged in and changed it (the administrator then sets a new one).
+    'temp_password_days' => (int) env('BOTIKA_TEMP_PASSWORD_DAYS', 3),
     // Most a resident can ask for of one medicine in a single request (medicine or restock request).
     // Keep the same number as MAX_REQUEST_QUANTITY in the frontend (src/validation.ts).
     'max_request_quantity' => (int) env('BOTIKA_MAX_REQUEST_QUANTITY', 30),

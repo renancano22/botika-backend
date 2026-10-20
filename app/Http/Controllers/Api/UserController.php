@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Support\Rules;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /** Admin: Manage User Accounts (create, view, edit, deactivate) - Fig. 4.4. */
 class UserController extends Controller
@@ -28,16 +29,16 @@ class UserController extends Controller
         $data = $request->validate([
             'name' => Rules::name(),
             'email' => [...Rules::gmail(), 'unique:users,email'],
-            'password' => [...Rules::password(), 'confirmed'],
+            'password' => [...Rules::password(true, [$request->input('name'), $request->input('email')]), 'confirmed'],
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF])],
         ], Rules::messages() + ['password.confirmed' => 'The password and its confirmation do not match.']);
 
-        return response()->json(User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'password_hash' => $data['password'],
-            'role' => $data['role'],
-        ]), 201);
+        // The password is a temporary default: the new user must change it at the first log-in.
+        $user = new User(['name' => $data['name'], 'email' => $data['email'], 'role' => $data['role']]);
+        $user->setTemporaryPassword($data['password']);
+        $user->save();
+
+        return response()->json($user->fresh(), 201);
     }
 
     public function update(Request $request, User $user)
@@ -50,7 +51,7 @@ class UserController extends Controller
             'name' => Rules::name(),
             // Residents may have no email (they log in with their mobile number); staff and admin need one.
             'email' => [...Rules::gmail($user->role !== User::ROLE_RESIDENT), Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
-            'password' => [...Rules::password(false), 'confirmed'],
+            'password' => [...Rules::password(false, [$request->input('name'), $request->input('email'), $user->resident?->contact_no]), 'confirmed'],
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF, User::ROLE_RESIDENT])],
         ], Rules::messages() + ['password.confirmed' => 'The new password and its confirmation do not match.']);
 
@@ -62,6 +63,11 @@ class UserController extends Controller
         if ($user->role !== User::ROLE_RESIDENT && $data['role'] === User::ROLE_RESIDENT) {
             return response()->json(['message' => 'Staff and administrator accounts cannot be changed to resident.'], 422);
         }
+        // The administrator changes their own password with "Change password" (which asks for the current one),
+        // so a session left open cannot be used to take over the account.
+        if ((int) $user->user_id === (int) $request->user()->user_id && ! empty($data['password'])) {
+            throw ValidationException::withMessages(['password' => 'To change your own password, use "Change password" in the menu.']);
+        }
         // Prevents the administrator from locking themselves out of the admin pages.
         if ((int) $user->user_id === (int) $request->user()->user_id && $data['role'] !== $user->role) {
             return response()->json(['message' => 'You cannot change the role of your own account.'], 422);
@@ -69,7 +75,10 @@ class UserController extends Controller
 
         $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null, 'role' => $data['role']]);
         if (! empty($data['password'])) {
-            $user->password_hash = $data['password'];
+            // A password set by the administrator is temporary (e.g. a forgotten password): the user must
+            // change it at their next log-in, and is logged out everywhere now.
+            $user->setTemporaryPassword($data['password']);
+            $user->tokens()->delete();
         }
         $user->save();
 

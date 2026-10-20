@@ -29,6 +29,8 @@ class User extends Authenticatable
         return [
             'password_hash' => 'hashed',
             'is_active' => 'boolean',
+            'must_change_password' => 'boolean',
+            'temp_password_expires_at' => 'datetime',
             'created_at' => 'datetime',
         ];
     }
@@ -57,6 +59,38 @@ class User extends Authenticatable
     public function hasPermission(string $permission): bool
     {
         return app(PermissionService::class)->allows($this, $permission);
+    }
+
+    /**
+     * The administrator set this password (new account or reset): the user must change it at the next
+     * log-in, and it stops working after botika.temp_password_days. Other devices are logged out.
+     * (Not mass assignable on purpose: only these methods change it.)
+     */
+    public function setTemporaryPassword(string $password): void
+    {
+        $this->password_hash = $password; // hashed by the cast
+        $this->must_change_password = true;
+        $this->temp_password_expires_at = now()->addDays(config('botika.temp_password_days'));
+    }
+
+    /** The user chose their own password. */
+    public function setOwnPassword(string $password): void
+    {
+        $this->password_hash = $password;
+        $this->must_change_password = false;
+        $this->temp_password_expires_at = null;
+    }
+
+    /** After a password change: log out every other phone/computer; the current one stays logged in. */
+    public function logoutOtherDevices(): void
+    {
+        $current = $this->currentAccessToken();
+        $this->tokens()->when($current?->id, fn ($q, $id) => $q->where('id', '!=', $id))->delete();
+    }
+
+    public function temporaryPasswordExpired(): bool
+    {
+        return $this->must_change_password && $this->temp_password_expires_at && $this->temp_password_expires_at->isPast();
     }
 
     public function resident(): HasOne

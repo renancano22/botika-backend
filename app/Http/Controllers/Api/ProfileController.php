@@ -4,12 +4,11 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Resident;
+use App\Support\PasswordAttempts;
 use App\Support\Rules;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 /**
  * Resident "My Profile": view and edit their own information, profile picture and password.
@@ -63,7 +62,8 @@ class ProfileController extends Controller
         ];
         if ($changePassword) {
             $rules['current_password'] = ['required', 'string'];
-            $rules['password'] = [...Rules::password(), 'confirmed', 'different:current_password'];
+            $rules['password'] = [...Rules::password(true, [$request->input('name'), $request->input('email'), $request->input('contact_no'), $user->name, $user->email]),
+                'confirmed', 'different:current_password'];
         }
 
         $data = $request->validate($rules, Rules::messages() + self::PHOTO_MESSAGES + [
@@ -76,14 +76,14 @@ class ProfileController extends Controller
             'password.different' => 'The new password must be different from your current password.',
         ]);
 
-        if ($changePassword && ! Hash::check($data['current_password'], $user->password_hash)) {
-            throw ValidationException::withMessages(['current_password' => 'Your current password is incorrect. Your changes were not saved.']);
+        if ($changePassword) {
+            PasswordAttempts::verify($user, $data['current_password'], 'current_password', 'Your current password is incorrect. Your changes were not saved.');
         }
 
         DB::transaction(function () use ($user, $resident, $data, $changePassword, $request) {
             $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null]);
             if ($changePassword) {
-                $user->password_hash = $data['password']; // hashed by the model
+                $user->setOwnPassword($data['password']);
             }
             $user->save();
 
@@ -101,8 +101,7 @@ class ProfileController extends Controller
         });
 
         if ($changePassword) {
-            // Log out other phones/computers that used the old password; this one stays logged in.
-            $user->tokens()->where('id', '!=', $user->currentAccessToken()->id)->delete();
+            $user->logoutOtherDevices(); // the old password must not keep other devices logged in
         }
 
         return $this->profile($request) + ['password_changed' => $changePassword];
@@ -131,18 +130,14 @@ class ProfileController extends Controller
         $user = $request->user();
         $data = $request->validate([
             'current_password' => ['required', 'string'],
-            'password' => [...Rules::password(), 'confirmed'],
-        ]);
+            'password' => [...Rules::password(true, [$user->name, $user->email, $user->resident?->contact_no]), 'confirmed', 'different:current_password'],
+        ], Rules::messages() + ['password.different' => 'The new password must be different from your current password.']);
 
-        if (! Hash::check($data['current_password'], $user->password_hash)) {
-            throw ValidationException::withMessages(['current_password' => 'Your current password is incorrect.']);
-        }
+        PasswordAttempts::verify($user, $data['current_password']);
 
-        $user->password_hash = $data['password'];
+        $user->setOwnPassword($data['password']);
         $user->save();
-
-        // Log out other phones/computers that used the old password; this one stays logged in.
-        $user->tokens()->where('id', '!=', $user->currentAccessToken()->id)->delete();
+        $user->logoutOtherDevices();
 
         return response()->json(['message' => 'Your password has been changed.']);
     }
