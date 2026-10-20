@@ -105,11 +105,12 @@ class RequestController extends Controller
         });
 
         // In-app confirmation only (no SMS, to save SMS credits).
+        $reviewer = $data['request_type'] === 'restock' ? 'the administrator' : 'the pharmacy staff';
         $this->sms->notifyInApp(
             $resident,
-            $data['request_type'] === 'restock'
-                ? "Your restock request No. {$req->request_id} has been submitted and is now under review by the administrator."
-                : "Your medicine request No. {$req->request_id} has been submitted and is now under review by the pharmacy staff.",
+            "Your {$data['request_type']} request No. {$req->request_id} ({$req->itemsSummary()}) was submitted successfully "
+                . "and is now waiting for review by {$reviewer}. You will be notified once it is approved or not approved. "
+                . 'No action is needed for now.',
             $req->request_id,
             'submitted'
         );
@@ -158,7 +159,10 @@ class RequestController extends Controller
         // In-app confirmation only (the resident cancelled it themselves).
         $this->sms->notifyInApp(
             $medicineRequest->resident,
-            "You cancelled your {$medicineRequest->request_type} request No. {$medicineRequest->request_id}. You may submit a new request anytime.",
+            "You cancelled your {$medicineRequest->request_type} request No. {$medicineRequest->request_id} "
+                . "({$medicineRequest->itemsSummary()}) on " . MedicineRequest::noticeDate(now()) . '. '
+                . ($wasReserved ? 'The medicine set aside for you was returned to the stock. ' : '')
+                . 'This request is now closed. You may submit a new request anytime if you still need the medicine.',
             $medicineRequest->request_id,
             'cancelled'
         );
@@ -184,13 +188,16 @@ class RequestController extends Controller
 
         if ($medicineRequest->request_type === 'medicine') {
             $this->checkAvailability('medicine', $medicineRequest->items->map->only(['medicine_id', 'quantity'])->all());
-            $claimBy = MedicineRequest::claimDeadline(now())->format('F j, Y');
-            // Kept short so it fits in one SMS (160 characters).
-            $message = "BulanBotikaCare: Request No. {$medicineRequest->request_id} APPROVED. Claim it at Botika ng Bayan Bulan "
-                . "on or before {$claimBy} or it will be cancelled. Bring QR/ID {$medicineRequest->resident->qr_code}.";
+            // Pickup date = the approval date; the resident has botika.unclaimed_days (7) days to claim it.
+            $pickup = MedicineRequest::noticeDate(now());
+            $deadline = MedicineRequest::noticeDate(MedicineRequest::claimDeadline(now()));
+            $days = config('botika.unclaimed_days');
+            $message = "BulanBotikaCare: Request No. {$medicineRequest->request_id} is APPROVED and ready for pickup at Botika ng Bayan Bulan "
+                . "({$medicineRequest->itemsSummary()}). Pickup date: {$pickup}. Claim it on or before {$deadline} ({$days} days). "
+                . "Bring your Resident ID/QR {$medicineRequest->resident->qr_code} and a valid ID or Barangay ID. After the deadline, the medicine will no longer be given.";
         } else {
-            $message = "BulanBotikaCare: Your restock request No. {$medicineRequest->request_id} has been approved. "
-                . 'We will send you an SMS once the medicine is available.';
+            $message = "BulanBotikaCare: Your restock request No. {$medicineRequest->request_id} ({$medicineRequest->itemsSummary()}) is APPROVED. "
+                . 'We will notify you once the medicine is available at Botika ng Bayan Bulan. No action is needed for now.';
         }
 
         $medicineRequest->update([
@@ -231,7 +238,8 @@ class RequestController extends Controller
         $type = $medicineRequest->request_type === 'restock' ? 'restock' : 'medicine';
         $this->sms->notify(
             $medicineRequest->resident,
-            "BulanBotikaCare: Your {$type} request No. {$medicineRequest->request_id} was not approved. Reason: {$data['remarks']}",
+            "BulanBotikaCare: Your {$type} request No. {$medicineRequest->request_id} ({$medicineRequest->itemsSummary()}) was NOT APPROVED. "
+                . 'Reason: ' . rtrim(trim($data['remarks']), '.') . '. You may submit a new request if you still need the medicine.',
             $medicineRequest->request_id,
             'rejected'
         );

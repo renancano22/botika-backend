@@ -198,7 +198,8 @@ class InventoryService
             $names = $req->items->map(fn ($i) => $i->medicine->medicine_name)->implode(', ');
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Good news! {$names} is now available at Botika ng Bayan Bulan. You may now submit a medicine request.",
+                "BulanBotikaCare: Good news! {$names} from your restock request No. {$req->request_id} is now available at Botika ng Bayan Bulan. "
+                    . 'This restock request is now complete. To get the medicine, please submit a medicine request in the app.',
                 $req->request_id,
                 'available'
             );
@@ -224,18 +225,21 @@ class InventoryService
             ->get();
 
         foreach ($expired as $req) {
-            $deadline = MedicineRequest::claimDeadline($req->reviewed_at)->format('F j, Y');
+            $pickup = MedicineRequest::noticeDate($req->reviewed_at);
+            $deadline = MedicineRequest::noticeDate(MedicineRequest::claimDeadline($req->reviewed_at));
             $req->update(['status' => 'expired', 'cancelled_at' => now(), 'cancelled_by' => null]);
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Request No. {$req->request_id} was CANCELLED because it was not claimed by {$deadline}. Please submit a new request if you still need the medicine.",
+                "BulanBotikaCare: Request No. {$req->request_id} ({$req->itemsSummary()}) has EXPIRED. It was ready for pickup from {$pickup} "
+                    . "to {$deadline} but was not claimed, so it is no longer valid and the medicine will no longer be given. "
+                    . 'Please submit a new request if you still need the medicine.',
                 $req->request_id,
                 'expired'
             );
         }
         $this->releaseReserved($expired->flatMap(fn ($r) => $r->items->pluck('medicine_id')));
 
-        $dueSoon = MedicineRequest::with('resident')
+        $dueSoon = MedicineRequest::with(['items.medicine', 'resident'])
             ->where('request_type', 'medicine')
             ->where('status', 'approved')
             ->whereNull('reminded_at')
@@ -243,11 +247,14 @@ class InventoryService
             ->get();
 
         foreach ($dueSoon as $req) {
-            $deadline = MedicineRequest::claimDeadline($req->reviewed_at)->format('F j, Y');
+            $pickup = MedicineRequest::noticeDate($req->reviewed_at);
+            $deadline = MedicineRequest::noticeDate(MedicineRequest::claimDeadline($req->reviewed_at));
             $req->update(['reminded_at' => now()]);
             $this->sms->notify(
                 $req->resident,
-                "BulanBotikaCare: Reminder: claim your medicines for request No. {$req->request_id} at Botika ng Bayan Bulan on or before {$deadline} or it will be cancelled.",
+                "BulanBotikaCare: Pickup reminder for request No. {$req->request_id} ({$req->itemsSummary()}). Pickup date: {$pickup}. "
+                    . "Please claim it at Botika ng Bayan Bulan on or before {$deadline}, within {$days} days from the pickup date. "
+                    . 'If not claimed by then, the medicine will no longer be given and the request will no longer be valid for pickup. Bring your Resident ID/QR and a valid ID or Barangay ID.',
                 $req->request_id,
                 'reminder'
             );
