@@ -61,7 +61,7 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $user->createToken('web')->plainTextToken,
-            'user' => $user->load('resident'),
+            'user' => self::withPhoto($user),
         ], 201);
     }
 
@@ -95,11 +95,15 @@ class AuthController extends Controller
         return self::withPhoto($request->user());
     }
 
-    /** The logged-in user, including the resident's profile picture (shown in the top bar). */
+    /**
+     * The logged-in user, including the resident's profile picture (shown in the top bar) and the
+     * features they may use (User Permissions), so the menu and pages match what the server allows.
+     */
     public static function withPhoto(User $user): User
     {
         $user->load('resident');
         $user->resident?->makeVisible('photo');
+        $user->append('permissions');
         return $user;
     }
 

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use App\Services\PermissionService;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
@@ -45,6 +46,17 @@ class User extends Authenticatable
             return static::where('email', strtolower($login))->first();
         }
         return Resident::where('contact_no', Resident::normalizePhone($login))->first()?->user;
+    }
+
+    /** Features this user may use (Admin → User Permissions). Added to /me, login and profile responses. */
+    public function getPermissionsAttribute(): array
+    {
+        return app(PermissionService::class)->granted($this);
+    }
+
+    public function hasPermission(string $permission): bool
+    {
+        return app(PermissionService::class)->allows($this, $permission);
     }
 
     public function resident(): HasOne

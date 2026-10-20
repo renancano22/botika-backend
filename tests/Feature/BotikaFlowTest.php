@@ -971,4 +971,55 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/notifications/announce', ['message' => 'Hi'], $this->token($admin))->assertStatus(422)->assertJsonValidationErrors('message');
         $this->postJson('/api/notifications/announce', ['message' => str_repeat('a', 301)], $this->token($admin))->assertStatus(422)->assertJsonValidationErrors('message');
     }
+
+    public function test_admin_manages_user_permissions(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $staff = User::factory()->create();
+        $medicine = Medicine::create(['medicine_name' => 'Cetirizine 10mg', 'category' => 'Antihistamine', 'unit' => 'tablet', 'reorder_level' => 5]);
+        Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 40, 'expiration_date' => now()->addYear()->toDateString()]);
+        $reg = $this->postJson('/api/register', [
+            'name' => 'Lito Garcia', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Zone I Poblacion', 'contact_no' => '09178887777',
+        ])->assertCreated();
+        $resident = ['Authorization' => 'Bearer ' . $reg->json('token')];
+
+        // By default each role keeps the access it always had, and /me lists it for the menu.
+        $this->assertContains('requests.review', $this->getJson('/api/me', $this->token($staff))->json('permissions'));
+        $this->assertContains('restock.create', $reg->json('user.permissions'));
+
+        // Only the administrator can see and change permissions.
+        $this->getJson('/api/permissions', $this->token($staff))->assertForbidden();
+        $this->putJson('/api/permissions/staff', ['permissions' => ['requests.review' => false]], $this->token($staff))->assertForbidden();
+        $this->getJson('/api/permissions', $resident)->assertForbidden();
+        $this->getJson('/api/permissions', $this->token($admin))->assertOk()
+            ->assertJsonPath('roles.0.role', 'staff')->assertJsonPath('roles.1.role', 'resident');
+
+        $requestId = $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 5]]], $resident)
+            ->assertCreated()->json('request_id');
+
+        // The administrator stops staff from approving requests and recording stock.
+        $this->putJson('/api/permissions/staff', ['permissions' => ['requests.review' => false, 'inventory.manage' => false]], $this->token($admin))->assertOk();
+        $this->postJson("/api/requests/{$requestId}/approve", [], $this->token($staff))
+            ->assertForbidden()->assertJsonPath('permission', 'requests.review');
+        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $medicine->medicine_id, 'quantity' => 5, 'expiration_date' => now()->addYear()->toDateString()], $this->token($staff))
+            ->assertForbidden();
+        $this->getJson('/api/inventory', $this->token($staff))->assertOk(); // viewing stock is still allowed
+        $this->assertNotContains('requests.review', $this->getJson('/api/me', $this->token($staff))->json('permissions'));
+
+        // The administrator is never restricted.
+        $this->postJson("/api/requests/{$requestId}/approve", [], $this->token($admin))->assertOk();
+
+        // Residents: restock requests and profile editing turned off; medicine requests still allowed.
+        $this->putJson('/api/permissions/resident', ['permissions' => ['restock.create' => false, 'profile.edit' => false]], $this->token($admin))->assertOk();
+        $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 50]]], $resident)
+            ->assertForbidden();
+        $this->putJson('/api/profile', ['name' => 'Lito Garcia'], $resident)->assertForbidden();
+        $this->getJson('/api/profile', $resident)->assertOk(); // the QR code stays available
+
+        // Unknown permissions are refused, and Reset brings back the default access.
+        $this->putJson('/api/permissions/staff', ['permissions' => ['users.manage' => true]], $this->token($admin))->assertStatus(422);
+        $this->postJson('/api/permissions/staff/reset', [], $this->token($admin))->assertOk();
+        $this->assertContains('requests.review', $this->getJson('/api/me', $this->token($staff))->json('permissions'));
+    }
 }

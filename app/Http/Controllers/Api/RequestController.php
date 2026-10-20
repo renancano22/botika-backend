@@ -8,11 +8,13 @@ use App\Models\MedicineRequest;
 use App\Models\Prescription;
 use App\Models\User;
 use App\Services\InventoryService;
+use App\Services\PermissionService;
 use App\Services\SmsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+
 
 /**
  * Medicine requests and restock requests (DFD Process 3.0, Activity Diagram Fig. 4.5).
@@ -73,6 +75,13 @@ class RequestController extends Controller
         $resident = $request->user()->resident;
         abort_unless($resident, 403, 'Only residents can submit requests.');
 
+        // User Permissions (checked before the form, so a blocked user gets "Access denied", not a form error):
+        // medicine and restock requests can be turned off separately by the administrator.
+        $feature = $request->input('request_type') === 'restock' ? 'restock.create' : 'requests.create';
+        if (! $request->user()->hasPermission($feature)) {
+            $label = app(PermissionService::class)->label(User::ROLE_RESIDENT, $feature);
+            abort(403, "Access denied. You do not have permission to use \"{$label}\". Please contact the administrator if you need access.");
+        }
         $data = $this->validateItems($request, true);
         // Medicines that need a doctor's prescription: a photo/PDF of it must be uploaded with the request.
         $rxNames = $data['request_type'] === 'medicine'

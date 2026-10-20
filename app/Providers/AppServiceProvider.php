@@ -14,7 +14,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // One instance per request, so each role's permissions are read from the database only once.
+        $this->app->scoped(\App\Services\PermissionService::class);
     }
 
     /**
