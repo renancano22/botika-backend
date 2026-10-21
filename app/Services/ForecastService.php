@@ -28,7 +28,15 @@ use Carbon\Carbon;
  * A method that cannot give a meaningful forecast with the months available returns null (no made-up
  * numbers), and forecasts based on fewer months than recommended are marked provisional.
  * Each method is back-tested on the same records (mean absolute error, MAE) so the admin can see which
- * one has been the most accurate. The chosen method drives the restocking recommendation.
+ * one has been the most accurate. The average error only counts medicines that have dispensing records
+ * (a medicine never dispensed has nothing to test against). The chosen method drives the restocking recommendation.
+ *
+ * Request records (D4) are used for the demand the dispensing records cannot show yet, as of now:
+ *   - pending medicine requests and approved requests whose medicine is set aside (not yet dispensed);
+ *   - restock requests still waiting (pending / approved): residents who asked for a medicine that was out of stock.
+ * These are added to the restock recommendation, not to the monthly history: once a restock is fulfilled the
+ * resident makes a medicine request that is dispensed, so adding past restock requests to the history would
+ * count the same need twice.
  */
 class ForecastService
 {
@@ -376,7 +384,22 @@ class ForecastService
             ->orderBy('medicine_name')
             ->get();
 
+        // Demand in request records that is not in the dispensing records yet (as of now), per medicine.
+        $open = fn (string $type, array $statuses) => RequestItem::query()
+            ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
+            ->where('requests.request_type', $type)
+            ->whereIn('requests.status', $statuses)
+            ->when($medicineIds !== null, fn ($q) => $q->whereIn('request_items.medicine_id', $medicineIds))
+            ->groupBy('request_items.medicine_id')
+            ->selectRaw('request_items.medicine_id, SUM(request_items.quantity) as total')
+            ->pluck('total', 'medicine_id')
+            ->map(fn ($qty) => (int) $qty);
+        $pending = $open('medicine', ['pending']);
+        $reserved = $open('medicine', ['approved']); // set aside for residents, to be dispensed from the current stock
+        $restockWaiting = $open('restock', ['pending', 'approved']);
+
         $errorSum = array_fill_keys(self::METHODS, null);
+        $errorCount = array_fill_keys(self::METHODS, 0);
         $overall = array_fill_keys($basis, 0); // all medicines together, per basis month
         $rows = [];
         foreach ($medicines as $m) {
@@ -385,10 +408,13 @@ class ForecastService
             foreach ($series as $key => $qty) $overall[$key] += $qty;
 
             $methods = [];
+            $dispensedBefore = array_sum($series) > 0;
             foreach (self::METHODS as $method) {
                 $methods[$method] = self::methodResult($method, $series, $horizon);
-                if (($methods[$method]['mae'] ?? null) !== null) {
+                // Only medicines with dispensing records can show how accurate a method is.
+                if ($dispensedBefore && ($methods[$method]['mae'] ?? null) !== null) {
                     $errorSum[$method] = ($errorSum[$method] ?? 0) + $methods[$method]['mae'];
+                    $errorCount[$method]++;
                 }
             }
             $best = collect($methods)->filter(fn ($r) => $r !== null && $r['mae'] !== null)->sortBy('mae')->keys()->first()
@@ -403,14 +429,21 @@ class ForecastService
                 'history' => $history,
                 'methods' => $methods,
                 'best_method' => $best,
-                'available_stock' => (int) ($m->available_stock ?? 0),
+                'available_stock' => $available = (int) ($m->available_stock ?? 0), // non-expired batches
+                'reserved_stock' => $set = $reserved[$m->medicine_id] ?? 0,
+                'free_stock' => max(0, $available - $set),
+                'pending_requests' => $pending[$m->medicine_id] ?? 0,
+                'restock_requests' => $restockWaiting[$m->medicine_id] ?? 0,
                 'reorder_level' => (int) $m->reorder_level,
                 'stock_recorded' => $m->stockRecorded(),
             ];
         }
 
-        $count = max(1, count($rows));
-        $methodError = array_map(fn ($sum) => $sum === null ? null : round($sum / $count, 2), $errorSum);
+        // Average error per method over the medicines that have dispensing records.
+        $methodError = [];
+        foreach (self::METHODS as $method) {
+            $methodError[$method] = $errorCount[$method] ? round($errorSum[$method] / $errorCount[$method], 2) : null;
+        }
 
         $info = [];
         $overallMethods = [];
@@ -431,6 +464,7 @@ class ForecastService
             'basis' => ['months' => $basis, 'complete_months' => count($complete), 'partial' => $partial],
             'methods_info' => $info,
             'overall' => ['series' => $overall, 'methods' => $overallMethods],
+            'medicines_with_records' => count(array_filter($rows, fn ($r) => array_sum(array_intersect_key($r['history'], $overall)) > 0)),
         ];
     }
 
@@ -443,24 +477,30 @@ class ForecastService
         return array_key_first($known);
     }
 
-    /** Adds the chosen method's forecast and the restocking recommendation to one medicine. */
+    /**
+     * Adds the chosen method's forecast and the restocking recommendation to one medicine:
+     *   suggested restock = predicted demand + waiting requests + reorder level − free stock (never below 0)
+     * where waiting requests = pending medicine requests + restock requests still waiting, and
+     * free stock = non-expired stock − stock set aside for approved requests.
+     */
     private static function applyMethod(array $row, string $method, array $forecastKeys): array
     {
-        // No forecast without records: predicted demand stays 0 (the reorder level still applies).
+        // No forecast without records: predicted demand stays 0 (waiting requests and the reorder level still apply).
         $chosen = $row['methods'][$method] ?? null;
         $monthly = $chosen['monthly'] ?? array_fill(0, count($forecastKeys), 0);
         $predicted = $chosen === null ? 0 : (int) ceil(round($chosen['predicted_demand'], 2));
-        $available = $row['available_stock'];
-        // Enough to cover the predicted demand of the forecast period and stay above the reorder level.
+        $waiting = $row['pending_requests'] + $row['restock_requests'];
+        $need = $predicted + $waiting;
         // When the stock was never recorded there is nothing to compare with, so no restock is suggested.
-        $restock = $row['stock_recorded'] ? max(0, $predicted + $row['reorder_level'] - $available) : 0;
+        $restock = $row['stock_recorded'] ? max(0, $need + $row['reorder_level'] - $row['free_stock']) : 0;
 
         return $row + [
             'forecast' => $forecastKeys ? array_combine($forecastKeys, $monthly) : [],
             'predicted_demand' => $predicted,
+            'waiting_demand' => $waiting,
             'recommended_restock' => $restock,
-            // high: the stock would run out within the forecast period; medium: it would fall below the reorder level.
-            'priority' => $restock === 0 ? null : ($predicted > $available ? 'high' : 'medium'),
+            // high: the free stock would run out within the forecast period; medium: it would fall below the reorder level.
+            'priority' => $restock === 0 ? null : ($need > $row['free_stock'] ? 'high' : 'medium'),
         ];
     }
 
@@ -497,6 +537,8 @@ class ForecastService
             'months_with_data' => $data['months_with_data'],
             'basis' => $data['basis'],
             'overall' => $data['overall'],
+            // medicines with dispensing records in the months used (the average errors are based on these)
+            'medicines_with_records' => $data['medicines_with_records'],
             'summary' => [
                 'medicines_analyzed' => count($results),
                 'potential_stockouts' => count(array_filter($results, fn ($r) => $r['priority'] === 'high')),
