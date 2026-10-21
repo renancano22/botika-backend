@@ -19,6 +19,13 @@ class MedicineRequest extends Model
     protected $casts = ['request_date' => 'datetime', 'reviewed_at' => 'datetime', 'cancelled_at' => 'datetime', 'fulfilled_at' => 'datetime', 'reminded_at' => 'datetime', 'prescription_verified_at' => 'datetime'];
     protected $appends = ['claim_by', 'pickup_deadline', 'pickup_days'];
 
+    /**
+     * Medicine requests that count as demand: still being reviewed, approved (set aside) or dispensed.
+     * Rejected, cancelled (withdrawn by the resident) and expired (never claimed) requests are not counted.
+     * Used by the dashboard's demand analysis and by Demand Forecasting, so both count the same way.
+     */
+    public const DEMAND_STATUSES = ['pending', 'approved', 'dispensed'];
+
     public function resident(): BelongsTo
     {
         return $this->belongsTo(Resident::class, 'resident_id', 'resident_id');

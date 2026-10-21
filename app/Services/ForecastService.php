@@ -312,7 +312,7 @@ class ForecastService
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->join('medicines', 'medicines.medicine_id', '=', 'request_items.medicine_id')
             ->where('requests.request_type', 'medicine')
-            ->whereIn('requests.status', ['pending', 'approved', 'dispensed'])
+            ->whereIn('requests.status', MedicineRequest::DEMAND_STATUSES)
             ->where('requests.request_date', '>=', $since)
             ->groupBy('request_items.medicine_id', 'medicines.medicine_name', 'medicines.unit')
             ->selectRaw('request_items.medicine_id, medicines.medicine_name, medicines.unit, COUNT(*) as total, SUM(request_items.quantity) as quantity')
