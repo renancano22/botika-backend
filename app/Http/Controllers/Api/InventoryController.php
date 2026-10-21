@@ -27,9 +27,11 @@ class InventoryController extends Controller
     {
         $today = now()->toDateString();
         $warnUntil = InventoryService::nearExpiryCutoff();
+        // A batch with 0 left is "empty": it was all dispensed or removed, so its expiration date no longer
+        // matters (nothing is left to remove). Expired / near expiry only describe batches that still have stock.
         $withStatus = fn ($batches) => $batches->map(function (Inventory $b) use ($today, $warnUntil) {
             $exp = $b->expiration_date->toDateString();
-            $b->setAttribute('expiry_status', $exp <= $today ? 'expired' : ($exp <= $warnUntil ? 'near_expiry' : 'ok'));
+            $b->setAttribute('expiry_status', $b->quantity <= 0 ? 'empty' : ($exp <= $today ? 'expired' : ($exp <= $warnUntil ? 'near_expiry' : 'ok')));
             return $b;
         });
         $expiry = (string) $request->input('expiry', '');

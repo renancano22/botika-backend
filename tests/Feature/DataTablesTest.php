@@ -200,7 +200,12 @@ class DataTablesTest extends TestCase
         // Batches with stock left (7), earliest expiration first; used-up batches are kept and listed separately.
         [$ids] = $this->allPages('/api/inventory', ['per_page' => 5], $headers, 'inventory_id');
         $this->assertCount(7, $ids);
-        $this->getJson('/api/inventory?per_page=5&expiry=empty', $headers)->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.inventory_id', $batches[6]->inventory_id);
+        $this->getJson('/api/inventory?per_page=5&expiry=empty', $headers)->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.inventory_id', $batches[6]->inventory_id)
+            ->assertJsonPath('data.0.expiry_status', 'empty');
+        // An empty batch whose date has passed is not "expired stock" (nothing is left to remove).
+        $gone = Inventory::create(['medicine_id' => $med->medicine_id, 'quantity' => 0, 'expiration_date' => now()->subDays(3)->toDateString()]);
+        $this->getJson('/api/inventory?per_page=5&expiry=empty&sort=expiry', $headers)->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('data.0.inventory_id', $gone->inventory_id)->assertJsonPath('data.0.expiry_status', 'empty');
         $this->getJson('/api/inventory?per_page=5&expiry=expired', $headers)->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.expiry_status', 'expired');
         $this->getJson('/api/inventory?per_page=5&sort=newest', $headers)->assertJsonPath('data.0.inventory_id', Inventory::where('quantity', '>', 0)->max('inventory_id'));
 
