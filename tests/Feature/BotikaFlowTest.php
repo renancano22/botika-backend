@@ -1133,4 +1133,32 @@ class BotikaFlowTest extends TestCase
             ->assertStatus(422)->assertJsonPath('errors.current_password.0', 'Your temporary password has expired. Please ask the administrator to reset it.');
         $this->assertTrue(User::find($new->json('user.user_id'))->must_change_password);
     }
+
+    public function test_staff_and_admin_my_profile(): void
+    {
+        $staff = User::factory()->create(['name' => 'Joy Mercado', 'email' => 'joy.mercado@gmail.com']);
+        $here = $this->token($staff);
+        $other = $this->token($staff);
+
+        // Name only; the email (username) is changed by the administrator.
+        $this->putJson('/api/account', ['name' => 'Joy  Mercado-Cruz'], $here)->assertOk()
+            ->assertJsonPath('user.name', 'Joy Mercado-Cruz')->assertJsonPath('password_changed', false);
+        $this->putJson('/api/account', ['name' => 'Joy Mercado', 'email' => 'new@gmail.com'], $here)
+            ->assertStatus(422)->assertJsonValidationErrors('email');
+
+        // Changing the password here follows the same rules: wrong current password saves nothing.
+        $this->putJson('/api/account', ['name' => 'Joy M. Cruz', 'current_password' => 'wrong123', 'password' => 'Kalinga4821', 'password_confirmation' => 'Kalinga4821'], $here)
+            ->assertStatus(422)->assertJsonValidationErrors('current_password');
+        $this->assertSame('Joy Mercado-Cruz', $staff->fresh()->name);
+        $this->putJson('/api/account', ['name' => 'Joy M. Cruz', 'current_password' => 'password', 'password' => 'Kalinga4821', 'password_confirmation' => 'Kalinga4821'], $here)
+            ->assertOk()->assertJsonPath('password_changed', true);
+        $this->getJson('/api/me', $here)->assertOk();
+        $this->getJson('/api/me', $other)->assertUnauthorized();
+        $this->postJson('/api/login', ['login' => 'joy.mercado@gmail.com', 'password' => 'Kalinga4821'])->assertOk();
+
+        // Residents use their own Edit Profile.
+        $resident = $this->postJson('/api/register', ['name' => 'Ben Ramos', 'password' => 'secret123', 'password_confirmation' => 'secret123',
+            'barangay' => 'Zone I Poblacion', 'contact_no' => '09176664444'])->assertCreated();
+        $this->putJson('/api/account', ['name' => 'Ben Ramos'], ['Authorization' => 'Bearer ' . $resident->json('token')])->assertForbidden();
+    }
 }

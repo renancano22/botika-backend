@@ -6,11 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Support\PasswordAttempts;
 use App\Support\Rules;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Change own password (administrator and pharmacy staff from the menu; everyone at the first log-in with
- * a temporary password). Residents can also change it in Edit Profile.
+ * Own account: change password (required at the first log-in with a temporary password) and, for the
+ * administrator and pharmacy staff, My Profile. Residents use ProfileController (Edit Profile).
  */
 class AccountController extends Controller
 {
@@ -43,5 +44,53 @@ class AccountController extends Controller
             'message' => 'Your password has been changed.',
             'user' => AuthController::withPhoto($user->fresh()),
         ]);
+    }
+
+    /**
+     * My Profile (administrator and pharmacy staff) → Edit Profile → Save Changes. In one request:
+     *  - full name (the email is the username: only the administrator changes it, in User Accounts);
+     *  - password: optional, only when one of the password fields is filled. Same rules as Change password:
+     *    the current password must be correct (wrong tries are limited), the new one follows the password
+     *    policy, and other devices are logged out.
+     * Nothing is saved when any check fails.
+     */
+    public function update(Request $request)
+    {
+        $user = $request->user();
+        $request->merge(['name' => preg_replace('/\s+/u', ' ', trim((string) $request->input('name')))]);
+        $changePassword = $request->filled('current_password') || $request->filled('password') || $request->filled('password_confirmation');
+
+        $rules = ['name' => Rules::name(), 'email' => 'prohibited', 'role' => 'prohibited'];
+        if ($changePassword) {
+            $rules['current_password'] = ['required', 'string'];
+            $rules['password'] = [...Rules::password(true, [$request->input('name'), $user->name, $user->email]), 'confirmed', 'different:current_password'];
+        }
+        $data = $request->validate($rules, Rules::messages() + [
+            'email.prohibited' => 'Your email address is your username. Please ask the administrator to change it.',
+            'current_password.required' => 'Enter your current password to change your password.',
+            'password.required' => 'Enter a new password, or close Change Password to keep your current password.',
+            'password.confirmed' => 'The new password and its confirmation do not match.',
+            'password.different' => 'The new password must be different from your current password.',
+        ]);
+
+        if ($changePassword) {
+            PasswordAttempts::verify($user, $data['current_password'], 'current_password', 'Your current password is incorrect. Your changes were not saved.');
+        }
+
+        DB::transaction(function () use ($user, $data, $changePassword) {
+            $user->name = $data['name'];
+            if ($changePassword) {
+                $user->setOwnPassword($data['password']);
+            }
+            $user->save();
+        });
+        if ($changePassword) {
+            $user->logoutOtherDevices();
+        }
+
+        return [
+            'user' => AuthController::withPhoto($user->fresh()),
+            'password_changed' => $changePassword,
+        ];
     }
 }

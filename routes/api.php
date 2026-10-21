@@ -80,6 +80,8 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
 
     // ---- Administrator + Pharmacy staff
     Route::middleware('role:admin,staff')->group(function () {
+        Route::put('/account', [AccountController::class, 'update']); // My Profile (residents use /profile)
+
         Route::middleware('permission:medicines.manage')->group(function () {
             Route::post('/medicines', [MedicineController::class, 'store']);
             Route::put('/medicines/{medicine}', [MedicineController::class, 'update']);
