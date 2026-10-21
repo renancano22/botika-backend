@@ -32,6 +32,21 @@ class Rules
         return [$required ? 'required' : 'nullable', 'string', 'max:100', Password::min(8)->letters()->numbers(), new NotGuessablePassword($personal)];
     }
 
+    /**
+     * Profile picture (residents, administrator and pharmacy staff): resized in the browser to a small
+     * JPEG/PNG/WebP and sent as a data URL; at most about 300 KB.
+     */
+    public static function photo(bool $required = false): array
+    {
+        return [$required ? 'required' : 'nullable', 'string', 'max:400000', 'regex:/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/'];
+    }
+
+    public const PHOTO_MESSAGES = [
+        'photo.required' => 'Choose a picture.',
+        'photo.max' => 'The picture is too large. Please choose a smaller one.',
+        'photo.regex' => 'Please choose a JPG, PNG or WebP picture.',
+    ];
+
     public static function barangay(): array
     {
         return ['required', 'string', Rule::in(config('botika.barangays'))];

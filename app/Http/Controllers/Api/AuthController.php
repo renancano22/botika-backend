@@ -99,13 +99,17 @@ class AuthController extends Controller
     }
 
     /**
-     * The logged-in user, including the resident's profile picture (shown in the top bar) and the
-     * features they may use (User Permissions), so the menu and pages match what the server allows.
+     * The logged-in user, including their profile picture (shown in the top bar: residents.photo for a
+     * resident, users.photo for the administrator and pharmacy staff) and the features they may use
+     * (User Permissions), so the menu and pages match what the server allows.
      */
     public static function withPhoto(User $user): User
     {
         $user->load('resident');
         $user->resident?->makeVisible('photo');
+        if ($user->role !== User::ROLE_RESIDENT) {
+            $user->makeVisible('photo');
+        }
         $user->append('permissions');
         return $user;
     }

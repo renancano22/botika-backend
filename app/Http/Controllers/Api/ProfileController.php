@@ -16,13 +16,8 @@ use Illuminate\Validation\Rule;
  */
 class ProfileController extends Controller
 {
-    /** Profile pictures are resized in the browser to a small JPEG/PNG/WebP before upload. */
-    private const PHOTO_MAX_CHARS = 400000; // about 300 KB
-    private const PHOTO_REGEX = 'regex:/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/';
-    private const PHOTO_MESSAGES = [
-        'photo.max' => 'The picture is too large. Please choose a smaller one.',
-        'photo.regex' => 'Please choose a JPG, PNG or WebP picture.',
-    ];
+    /** Profile pictures: the same rules for every role (Rules::photo). */
+    private const PHOTO_MESSAGES = Rules::PHOTO_MESSAGES;
 
     public function show(Request $request)
     {
@@ -57,7 +52,7 @@ class ProfileController extends Controller
                 Rule::unique('residents', 'contact_no')->ignore($resident->resident_id, 'resident_id')],
             'barangay' => Rules::barangay(),
             'address_line' => ['nullable', 'string', 'max:120'],
-            'photo' => ['nullable', 'string', 'max:' . self::PHOTO_MAX_CHARS, self::PHOTO_REGEX],
+            'photo' => Rules::photo(),
             'remove_photo' => ['sometimes', 'boolean'],
         ];
         if ($changePassword) {
@@ -110,7 +105,7 @@ class ProfileController extends Controller
     public function updatePhoto(Request $request)
     {
         $data = $request->validate([
-            'photo' => ['required', 'string', 'max:' . self::PHOTO_MAX_CHARS, self::PHOTO_REGEX],
+            'photo' => Rules::photo(true),
         ], self::PHOTO_MESSAGES);
 
         $request->user()->resident->update(['photo' => $data['photo']]);

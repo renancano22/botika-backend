@@ -27,7 +27,8 @@ class User extends Authenticatable
     public const PASSWORD_REUSED = 'You cannot reuse a previously used password. Please choose a different password.';
 
     protected $fillable = ['name', 'email', 'password_hash', 'role', 'is_active'];
-    protected $hidden = ['password_hash'];
+    // The profile picture (admin/staff) is only sent with the logged-in user's own data (AuthController::withPhoto).
+    protected $hidden = ['password_hash', 'photo'];
 
     protected function casts(): array
     {
