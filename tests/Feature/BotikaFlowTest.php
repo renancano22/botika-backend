@@ -1161,4 +1161,140 @@ class BotikaFlowTest extends TestCase
             'barangay' => 'Zone I Poblacion', 'contact_no' => '09176664444'])->assertCreated();
         $this->putJson('/api/account', ['name' => 'Ben Ramos'], ['Authorization' => 'Bearer ' . $resident->json('token')])->assertForbidden();
     }
+
+    public function test_password_history_blocks_reusing_the_last_five_passwords(): void
+    {
+        $this->assertSame(5, config('botika.password_history')); // default: the current password and the 4 before it
+        $reused = User::PASSWORD_REUSED;
+        $staff = User::factory()->create(['name' => 'Rosa Lim', 'email' => 'rosa.lim@gmail.com', 'password_hash' => 'Simula2468']);
+        $here = $this->token($staff);
+        $change = fn (string $current, string $new) => $this->postJson('/api/account/password',
+            ['current_password' => $current, 'password' => $new, 'password_confirmation' => $new], $here);
+
+        // A new password that was never used is accepted.
+        $change('Simula2468', 'Kalinga4821')->assertOk();
+        // The previous password is rejected with a clear message, and nothing changes.
+        $change('Kalinga4821', 'Simula2468')->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+        $this->postJson('/api/login', ['login' => 'rosa.lim@gmail.com', 'password' => 'Kalinga4821'])->assertOk();
+
+        // Wrong current password: only that is reported, so the reuse check cannot be used to guess passwords.
+        $change('wrong1234', 'Simula2468')->assertStatus(422)
+            ->assertJsonValidationErrors('current_password')->assertJsonMissingValidationErrors('password');
+
+        $change('Kalinga4821', 'Masagana7302')->assertOk();
+        $change('Masagana7302', 'Tahanan6620')->assertOk();
+        $change('Tahanan6620', 'Liwanag3197')->assertOk();
+        // Current: Liwanag3197. Blocked: it and the 4 before it (Tahanan, Masagana, Kalinga, Simula).
+        foreach (['Tahanan6620', 'Masagana7302', 'Kalinga4821', 'Simula2468'] as $old) {
+            $change('Liwanag3197', $old)->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+        }
+        // My Profile (Edit Profile) follows the same rule; the name is not saved either.
+        $this->putJson('/api/account', ['name' => 'Rosa M. Lim', 'current_password' => 'Liwanag3197', 'password' => 'Masagana7302', 'password_confirmation' => 'Masagana7302'], $here)
+            ->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+        $this->assertSame('Rosa Lim', $staff->fresh()->name);
+
+        // After one more change, the oldest password (Simula2468) is no longer among the last 5 and can be used again.
+        $change('Liwanag3197', 'Dalampasigan42')->assertOk();
+        $change('Dalampasigan42', 'Kalinga4821')->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+        $change('Dalampasigan42', 'Simula2468')->assertOk();
+
+        // Only hashes are stored, only the last 4 previous passwords are kept, and none of it is ever sent back.
+        $history = \Illuminate\Support\Facades\DB::table('password_histories')->where('user_id', $staff->user_id)->orderByDesc('id')->pluck('password_hash');
+        $this->assertCount(4, $history);
+        foreach (['Dalampasigan42', 'Liwanag3197', 'Tahanan6620', 'Masagana7302'] as $i => $plain) {
+            $this->assertNotSame($plain, $history[$i]);
+            $this->assertTrue(Hash::check($plain, $history[$i]));
+        }
+        $admin = User::factory()->admin()->create();
+        foreach ([$this->getJson('/api/me', $here), $this->getJson('/api/users', $this->token($admin))] as $res) {
+            $res->assertOk();
+            $this->assertStringNotContainsString('password_hash', $res->getContent());
+            $this->assertStringNotContainsString('password_histor', $res->getContent());
+            $this->assertStringNotContainsString('$2y$', $res->getContent());
+        }
+
+        // The number of passwords that cannot be reused can be changed in the configuration.
+        config(['botika.password_history' => 1]); // only the current password
+        $change('Simula2468', 'Dalampasigan42')->assertOk();
+        $this->assertSame(0, \Illuminate\Support\Facades\DB::table('password_histories')->where('user_id', $staff->user_id)->count());
+    }
+
+    public function test_password_history_applies_to_temporary_passwords_and_admin_resets(): void
+    {
+        $reused = User::PASSWORD_REUSED;
+        $admin = User::factory()->admin()->create();
+        $created = $this->postJson('/api/users', ['name' => 'Nilo Garcia', 'email' => 'nilo.garcia@gmail.com', 'role' => 'staff'], $this->token($admin))->assertCreated();
+        $first = $created->json('temporary_password');
+        $staffId = $created->json('user.user_id');
+
+        // First log-in: the temporary password cannot be kept as the new password.
+        $headers = ['Authorization' => 'Bearer ' . $this->postJson('/api/login', ['login' => 'nilo.garcia@gmail.com', 'password' => $first])->json('token')];
+        $this->postJson('/api/account/password', ['current_password' => $first, 'password' => $first, 'password_confirmation' => $first], $headers)
+            ->assertStatus(422)->assertJsonValidationErrors('password');
+        $this->postJson('/api/account/password', ['current_password' => $first, 'password' => 'Kalinga4821', 'password_confirmation' => 'Kalinga4821'], $headers)
+            ->assertOk()->assertJsonPath('user.must_change_password', false);
+
+        // The administrator resets it: the new temporary password is not one used before.
+        $second = $this->postJson("/api/users/{$staffId}/reset-password", [], $this->token($admin))->assertOk()->json('temporary_password');
+        $staff = User::find($staffId);
+        foreach (\Illuminate\Support\Facades\DB::table('password_histories')->where('user_id', $staffId)->pluck('password_hash') as $hash) {
+            $this->assertFalse(Hash::check($second, $hash));
+        }
+        $this->assertTrue($staff->usedPasswordBefore('Kalinga4821'));
+        $this->assertTrue($staff->usedPasswordBefore($first));
+
+        // Changing the new temporary password: the staff member's old password and the old temporary password are rejected.
+        $headers = ['Authorization' => 'Bearer ' . $this->postJson('/api/login', ['login' => 'nilo.garcia@gmail.com', 'password' => $second])->json('token')];
+        foreach (['Kalinga4821', $first] as $old) {
+            $this->postJson('/api/account/password', ['current_password' => $second, 'password' => $old, 'password_confirmation' => $old], $headers)
+                ->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+        }
+        $this->assertTrue(User::find($staffId)->must_change_password); // still has to choose a new one
+        $this->postJson('/api/account/password', ['current_password' => $second, 'password' => 'Masagana7302', 'password_confirmation' => 'Masagana7302'], $headers)
+            ->assertOk()->assertJsonPath('user.must_change_password', false);
+
+        // The temporary password generator never gives a password the account already used.
+        $generated = \App\Support\TemporaryPassword::generate([], User::find($staffId));
+        $this->assertFalse(User::find($staffId)->usedPasswordBefore($generated));
+    }
+
+    public function test_password_history_applies_to_forgot_password_and_resident_profile(): void
+    {
+        $reused = User::PASSWORD_REUSED;
+        $sent = null;
+        $this->mock(\App\Services\SmsService::class, function ($mock) use (&$sent) {
+            $mock->shouldReceive('sendTo')->andReturnUsing(function ($number, $message) use (&$sent) {
+                $sent = $message;
+                return 'logged';
+            });
+        });
+        $reg = $this->postJson('/api/register', ['name' => 'Lorna Diaz', 'password' => 'Simula2468', 'password_confirmation' => 'Simula2468',
+            'barangay' => 'Gate', 'contact_no' => '09173334444'])->assertCreated();
+        $headers = ['Authorization' => 'Bearer ' . $reg->json('token')];
+
+        // Resident Change password / Edit Profile.
+        $this->putJson('/api/profile/password', ['current_password' => 'Simula2468', 'password' => 'Kalinga4821', 'password_confirmation' => 'Kalinga4821'], $headers)->assertOk();
+        $this->putJson('/api/profile/password', ['current_password' => 'Kalinga4821', 'password' => 'Simula2468', 'password_confirmation' => 'Simula2468'], $headers)
+            ->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+        $info = ['name' => 'Lorna Diaz', 'contact_no' => '09173334444', 'barangay' => 'Gate'];
+        $this->putJson('/api/profile', $info + ['current_password' => 'Kalinga4821', 'password' => 'Simula2468', 'password_confirmation' => 'Simula2468'], $headers)
+            ->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+
+        // Forgot password: without the right code nothing about the password is revealed.
+        $this->postJson('/api/forgot-password', ['login' => '09173334444'])->assertOk();
+        preg_match('/\b(\d{6})\b/', $sent, $m);
+        $code = $m[1];
+        $wrong = $code === '000000' ? '111111' : '000000';
+        $this->postJson('/api/reset-password', ['login' => '09173334444', 'code' => $wrong, 'password' => 'Simula2468', 'password_confirmation' => 'Simula2468'])
+            ->assertStatus(422)->assertJsonValidationErrors('code')->assertJsonMissingValidationErrors('password');
+
+        // With the right code: the current and previous passwords are rejected (the code still works), a new one is accepted.
+        foreach (['Kalinga4821', 'Simula2468'] as $old) {
+            $this->postJson('/api/reset-password', ['login' => '09173334444', 'code' => $code, 'password' => $old, 'password_confirmation' => $old])
+                ->assertStatus(422)->assertJsonPath('errors.password.0', $reused);
+        }
+        $this->postJson('/api/reset-password', ['login' => '09173334444', 'code' => $code, 'password' => 'Masagana7302', 'password_confirmation' => 'Masagana7302'])->assertOk();
+        $this->postJson('/api/login', ['login' => '09173334444', 'password' => 'Masagana7302'])->assertOk();
+        $this->postJson('/api/login', ['login' => '09173334444', 'password' => 'Kalinga4821'])->assertStatus(422);
+    }
 }

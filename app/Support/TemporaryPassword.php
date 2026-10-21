@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\User;
 use Illuminate\Support\Facades\Validator;
 use RuntimeException;
 
@@ -16,8 +17,11 @@ class TemporaryPassword
     private const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz';
     private const DIGITS = '23456789';
 
-    /** 12 characters (8 letters, 4 numbers, mixed) that pass the password policy for this person. */
-    public static function generate(array $personal = []): string
+    /**
+     * 12 characters (8 letters, 4 numbers, mixed) that pass the password policy for this person and, for an
+     * existing account ($user), are not its current or a previous password (password history).
+     */
+    public static function generate(array $personal = [], ?User $user = null): string
     {
         for ($try = 0; $try < 20; $try++) {
             $chars = [];
@@ -28,7 +32,8 @@ class TemporaryPassword
                 [$chars[$i], $chars[$j]] = [$chars[$j], $chars[$i]];
             }
             $password = implode('', $chars);
-            if (Validator::make(['password' => $password], ['password' => Rules::password(true, $personal)])->passes()) {
+            if (Validator::make(['password' => $password], ['password' => Rules::password(true, $personal)])->passes()
+                && ! $user?->usedPasswordBefore($password)) {
                 return $password;
             }
         }

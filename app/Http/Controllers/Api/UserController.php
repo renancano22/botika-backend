@@ -102,7 +102,7 @@ class UserController extends Controller
             return response()->json(['message' => 'Activate this account first, then reset its password.'], 422);
         }
 
-        $temporary = TemporaryPassword::generate([$user->name, $user->email, $user->resident?->contact_no]);
+        $temporary = TemporaryPassword::generate([$user->name, $user->email, $user->resident?->contact_no], $user);
         $user->setTemporaryPassword($temporary);
         $user->save();
         $user->tokens()->delete();
