@@ -30,7 +30,7 @@ class AccountController extends Controller
         ]);
 
         if ($user->temporaryPasswordExpired()) {
-            throw ValidationException::withMessages(['current_password' => 'Your temporary password has expired. Please ask the administrator to set a new one.']);
+            throw ValidationException::withMessages(['current_password' => 'Your temporary password has expired. Please ask the administrator to reset it.']);
         }
         PasswordAttempts::verify($user, $data['current_password'], 'current_password',
             $temporary ? 'The temporary password is incorrect.' : 'Your current password is incorrect.');

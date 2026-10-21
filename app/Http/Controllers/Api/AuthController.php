@@ -84,7 +84,7 @@ class AuthController extends Controller
             throw ValidationException::withMessages(['login' => 'This account has been deactivated. Please contact the administrator.']);
         }
         if ($user->temporaryPasswordExpired()) {
-            throw ValidationException::withMessages(['login' => 'Your temporary password has expired. Please ask the administrator to set a new one.']);
+            throw ValidationException::withMessages(['login' => 'Your temporary password has expired. Please ask the administrator to reset it.']);
         }
 
         return response()->json([

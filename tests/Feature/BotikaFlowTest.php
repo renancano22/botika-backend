@@ -9,6 +9,7 @@ use App\Services\ForecastService;
 use App\Support\MedicineCatalog;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
 class BotikaFlowTest extends TestCase
@@ -114,11 +115,11 @@ class BotikaFlowTest extends TestCase
         $this->deleteJson("/api/medicines/{$medicine->medicine_id}", [], $this->token($admin))->assertStatus(422);
         $this->deleteJson("/api/medicines/{$unused->medicine_id}", [], $this->token($admin))->assertNoContent();
 
-        // New accounts need the password typed twice.
-        $newStaff = ['name' => 'Rosa Lim', 'email' => 'rosa.lim@gmail.com', 'password' => 'secret123', 'role' => 'staff'];
-        $this->postJson('/api/users', $newStaff + ['password_confirmation' => 'secret124'], $this->token($admin))
+        // New accounts get a temporary password made by the system; the administrator cannot choose one.
+        $newStaff = ['name' => 'Rosa Lim', 'email' => 'rosa.lim@gmail.com', 'role' => 'staff'];
+        $this->postJson('/api/users', $newStaff + ['password' => 'secret123', 'password_confirmation' => 'secret123'], $this->token($admin))
             ->assertStatus(422)->assertJsonValidationErrors('password');
-        $this->postJson('/api/users', $newStaff + ['password_confirmation' => 'secret123'], $this->token($admin))->assertCreated();
+        $this->postJson('/api/users', $newStaff, $this->token($admin))->assertCreated()->assertJsonStructure(['user', 'temporary_password']);
 
         $this->putJson("/api/users/{$admin->user_id}", ['name' => $admin->name, 'email' => $admin->email, 'role' => 'staff'], $this->token($admin))
             ->assertStatus(422);
@@ -1032,39 +1033,64 @@ class BotikaFlowTest extends TestCase
     public function test_new_staff_must_change_temporary_password_at_first_log_in(): void
     {
         $admin = User::factory()->admin()->create();
-        $created = $this->postJson('/api/users', [
-            'name' => 'Carlo Reyes', 'email' => 'carlo.reyes@gmail.com', 'role' => 'staff',
-            'password' => 'Welcome2026', 'password_confirmation' => 'Welcome2026',
-        ], $this->token($admin))->assertCreated()->assertJsonPath('must_change_password', true);
+        $created = $this->postJson('/api/users', ['name' => 'Carlo Reyes', 'email' => 'carlo.reyes@gmail.com', 'role' => 'staff'], $this->token($admin))
+            ->assertCreated()->assertJsonPath('user.must_change_password', true);
+        $this->assertStringContainsString('no-store', (string) $created->headers->get('Cache-Control'));
 
-        // First log-in with the default password: only "change password" is possible.
-        $login = $this->postJson('/api/login', ['login' => 'carlo.reyes@gmail.com', 'password' => 'Welcome2026'])
+        // The system makes the temporary password (12 random letters and numbers) and stores only its hash.
+        $temporary = $created->json('temporary_password');
+        $this->assertMatchesRegularExpression('/^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{12}$/', $temporary);
+        $staff = User::find($created->json('user.user_id'));
+        $this->assertNotSame($temporary, $staff->password_hash);
+        $this->assertTrue(Hash::check($temporary, $staff->password_hash));
+
+        // It is never shown again: not in the user list, and no password (or hash) is ever returned.
+        $list = $this->getJson('/api/users', $this->token($admin))->assertOk()->getContent();
+        $this->assertStringNotContainsString($temporary, $list);
+        $this->assertStringNotContainsString('password_hash', $list);
+
+        // The administrator cannot choose or set a password when editing.
+        $this->putJson("/api/users/{$staff->user_id}", ['name' => $staff->name, 'email' => $staff->email, 'role' => 'staff',
+            'password' => 'Kalinga4821', 'password_confirmation' => 'Kalinga4821'], $this->token($admin))
+            ->assertStatus(422)->assertJsonValidationErrors('password');
+
+        // First log-in with the temporary password: only "change password" is possible.
+        $login = $this->postJson('/api/login', ['login' => 'carlo.reyes@gmail.com', 'password' => $temporary])
             ->assertOk()->assertJsonPath('user.must_change_password', true);
         $headers = ['Authorization' => 'Bearer ' . $login->json('token')];
         $this->getJson('/api/me', $headers)->assertOk();
         $this->getJson('/api/medicines', $headers)->assertForbidden()->assertJsonPath('code', 'password_change_required');
 
-        // The temporary password must be correct, and the new one must be different.
+        // The temporary password must be correct, and the new one must be different and not easy to guess.
         $this->postJson('/api/account/password', ['current_password' => 'wrong123', 'password' => 'MyOwnPass9', 'password_confirmation' => 'MyOwnPass9'], $headers)
             ->assertStatus(422)->assertJsonValidationErrors('current_password');
-        $this->postJson('/api/account/password', ['current_password' => 'Welcome2026', 'password' => 'Welcome2026', 'password_confirmation' => 'Welcome2026'], $headers)
+        $this->postJson('/api/account/password', ['current_password' => $temporary, 'password' => $temporary, 'password_confirmation' => $temporary], $headers)
             ->assertStatus(422)->assertJsonValidationErrors('password');
-        $this->postJson('/api/account/password', ['current_password' => 'Welcome2026', 'password' => 'Carlo2026x', 'password_confirmation' => 'Carlo2026x'], $headers)
+        $this->postJson('/api/account/password', ['current_password' => $temporary, 'password' => 'Carlo2026x', 'password_confirmation' => 'Carlo2026x'], $headers)
             ->assertStatus(422)->assertJsonValidationErrors('password'); // contains the name
-        $this->postJson('/api/account/password', ['current_password' => 'Welcome2026', 'password' => 'MyOwnPass9', 'password_confirmation' => 'MyOwnPass9'], $headers)
+        $this->postJson('/api/account/password', ['current_password' => $temporary, 'password' => 'MyOwnPass9', 'password_confirmation' => 'MyOwnPass9'], $headers)
             ->assertOk()->assertJsonPath('user.must_change_password', false);
         $this->getJson('/api/medicines', $headers)->assertOk();
 
-        // A new password set by the administrator is temporary again.
-        $staff = User::find($created->json('user_id'));
-        $this->putJson("/api/users/{$staff->user_id}", ['name' => $staff->name, 'email' => $staff->email, 'role' => 'staff', 'password' => 'Reset2026x', 'password_confirmation' => 'Reset2026x'], $this->token($admin))
-            ->assertOk();
-        $this->assertTrue($staff->fresh()->must_change_password);
-        $this->postJson('/api/login', ['login' => 'carlo.reyes@gmail.com', 'password' => 'Reset2026x'])->assertOk();
+        // Lost password: the administrator can only replace it with a new temporary password (shown once).
+        // The password the staff member chose is never revealed, and stops working.
+        $reset = $this->postJson("/api/users/{$staff->user_id}/reset-password", [], $this->token($admin))
+            ->assertOk()->assertJsonPath('user.must_change_password', true);
+        $newTemporary = $reset->json('temporary_password');
+        $this->assertNotSame($temporary, $newTemporary);
+        $this->assertStringContainsString('no-store', (string) $reset->headers->get('Cache-Control'));
+        $this->getJson('/api/me', $headers)->assertUnauthorized(); // logged out everywhere
+        $this->postJson('/api/login', ['login' => 'carlo.reyes@gmail.com', 'password' => 'MyOwnPass9'])->assertStatus(422);
+        $this->postJson('/api/login', ['login' => 'carlo.reyes@gmail.com', 'password' => $newTemporary])
+            ->assertOk()->assertJsonPath('user.must_change_password', true);
+
+        // Only the administrator can reset, and never their own password (that needs the current password).
+        $this->postJson("/api/users/{$staff->user_id}/reset-password", [], $this->token(User::factory()->create()))->assertForbidden();
+        $this->postJson("/api/users/{$admin->user_id}/reset-password", [], $this->token($admin))->assertStatus(422);
 
         // An unused temporary password stops working after a few days.
         $this->travel(config('botika.temp_password_days') + 1)->days();
-        $this->postJson('/api/login', ['login' => 'carlo.reyes@gmail.com', 'password' => 'Reset2026x'])
+        $this->postJson('/api/login', ['login' => 'carlo.reyes@gmail.com', 'password' => $newTemporary])
             ->assertStatus(422)->assertJsonValidationErrors('login');
     }
 
@@ -1077,14 +1103,6 @@ class BotikaFlowTest extends TestCase
                 ->assertStatus(422)->assertJsonValidationErrors('password');
         }
         $admin = User::factory()->admin()->create();
-        $this->postJson('/api/users', ['name' => 'Carlo Reyes', 'email' => 'carlo.reyes@gmail.com', 'role' => 'staff',
-            'password' => 'Carlo12345', 'password_confirmation' => 'Carlo12345'], $this->token($admin))
-            ->assertStatus(422)->assertJsonValidationErrors('password');
-
-        // The administrator cannot change their own password from User Accounts (no current password there).
-        $this->putJson("/api/users/{$admin->user_id}", ['name' => $admin->name, 'email' => $admin->email, 'role' => 'admin',
-            'password' => 'Kalinga4821', 'password_confirmation' => 'Kalinga4821'], $this->token($admin))
-            ->assertStatus(422)->assertJsonValidationErrors('password');
 
         // Staff change their own password with the current one; other devices are logged out.
         $staff = User::factory()->create(['email' => 'joy.staff@gmail.com']);
@@ -1105,14 +1123,14 @@ class BotikaFlowTest extends TestCase
             ->assertStatus(422)->assertJsonPath('errors.current_password.0', fn ($m) => str_starts_with($m, 'Too many wrong passwords'));
 
         // A temporary password that has expired cannot be used to set a new password either.
-        $new = $this->postJson('/api/users', ['name' => 'Lea Santos', 'email' => 'lea.santos@gmail.com', 'role' => 'staff',
-            'password' => 'Panimula5508', 'password_confirmation' => 'Panimula5508'], $this->token($admin))->assertCreated();
+        $new = $this->postJson('/api/users', ['name' => 'Lea Santos', 'email' => 'lea.santos@gmail.com', 'role' => 'staff'], $this->token($admin))->assertCreated();
+        $temporary = $new->json('temporary_password');
         $this->travel(config('botika.temp_password_days') * 24 - 1)->hours();
-        $login = $this->postJson('/api/login', ['login' => 'lea.santos@gmail.com', 'password' => 'Panimula5508'])->assertOk();
+        $login = $this->postJson('/api/login', ['login' => 'lea.santos@gmail.com', 'password' => $temporary])->assertOk();
         $this->travel(2)->hours();
-        $this->postJson('/api/account/password', ['current_password' => 'Panimula5508', 'password' => 'Sariling8841', 'password_confirmation' => 'Sariling8841'],
+        $this->postJson('/api/account/password', ['current_password' => $temporary, 'password' => 'Sariling8841', 'password_confirmation' => 'Sariling8841'],
             ['Authorization' => 'Bearer ' . $login->json('token')])
-            ->assertStatus(422)->assertJsonPath('errors.current_password.0', 'Your temporary password has expired. Please ask the administrator to set a new one.');
-        $this->assertTrue(User::find($new->json('user_id'))->must_change_password);
+            ->assertStatus(422)->assertJsonPath('errors.current_password.0', 'Your temporary password has expired. Please ask the administrator to reset it.');
+        $this->assertTrue(User::find($new->json('user.user_id'))->must_change_password);
     }
 }

@@ -10,7 +10,7 @@ return [
     'unclaimed_days' => (int) env('BOTIKA_UNCLAIMED_DAYS', 7),
 
     // A temporary default password set by the administrator stops working after this many days
-    // if the user has not logged in and changed it (the administrator then sets a new one).
+    // if the user has not logged in and changed it (the administrator then resets it: a new temporary password).
     'temp_password_days' => (int) env('BOTIKA_TEMP_PASSWORD_DAYS', 3),
     // Most a resident can ask for of one medicine in a single request (medicine or restock request).
     // Keep the same number as MAX_REQUEST_QUANTITY in the frontend (src/validation.ts).

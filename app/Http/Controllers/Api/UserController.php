@@ -5,13 +5,22 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Support\Rules;
+use App\Support\TemporaryPassword;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
-/** Admin: Manage User Accounts (create, view, edit, deactivate) - Fig. 4.4. */
+/**
+ * Admin: Manage User Accounts (create, view, edit, deactivate) - Fig. 4.4.
+ *
+ * Passwords: the administrator never chooses, sees or retrieves a user's password. When an account is
+ * created, or its password is reset, the server generates a temporary password, stores only its hash and
+ * returns the plain password once, in that response only. The user must change it at the first log-in,
+ * and only they know the password they choose.
+ */
 class UserController extends Controller
 {
+    private const PASSWORD_PROHIBITED = 'Passwords cannot be set here. The system generates a temporary password (use Reset password).';
+
     public function index(Request $request)
     {
         return User::with('resident')
@@ -29,16 +38,17 @@ class UserController extends Controller
         $data = $request->validate([
             'name' => Rules::name(),
             'email' => [...Rules::gmail(), 'unique:users,email'],
-            'password' => [...Rules::password(true, [$request->input('name'), $request->input('email')]), 'confirmed'],
+            'password' => 'prohibited',
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF])],
-        ], Rules::messages() + ['password.confirmed' => 'The password and its confirmation do not match.']);
+        ], Rules::messages() + ['password.prohibited' => self::PASSWORD_PROHIBITED]);
 
-        // The password is a temporary default: the new user must change it at the first log-in.
+        // Temporary password: the new user must change it at the first log-in.
+        $temporary = TemporaryPassword::generate([$data['name'], $data['email']]);
         $user = new User(['name' => $data['name'], 'email' => $data['email'], 'role' => $data['role']]);
-        $user->setTemporaryPassword($data['password']);
+        $user->setTemporaryPassword($temporary);
         $user->save();
 
-        return response()->json($user->fresh(), 201);
+        return $this->withTemporaryPassword($user, $temporary, 201);
     }
 
     public function update(Request $request, User $user)
@@ -51,9 +61,9 @@ class UserController extends Controller
             'name' => Rules::name(),
             // Residents may have no email (they log in with their mobile number); staff and admin need one.
             'email' => [...Rules::gmail($user->role !== User::ROLE_RESIDENT), Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
-            'password' => [...Rules::password(false, [$request->input('name'), $request->input('email'), $user->resident?->contact_no]), 'confirmed'],
+            'password' => 'prohibited', // passwords are only changed by Reset password or by the user
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF, User::ROLE_RESIDENT])],
-        ], Rules::messages() + ['password.confirmed' => 'The new password and its confirmation do not match.']);
+        ], Rules::messages() + ['password.prohibited' => self::PASSWORD_PROHIBITED]);
 
         // A resident account must stay a resident (it is linked to a resident profile).
         if ($user->role === User::ROLE_RESIDENT && $data['role'] !== User::ROLE_RESIDENT) {
@@ -63,23 +73,12 @@ class UserController extends Controller
         if ($user->role !== User::ROLE_RESIDENT && $data['role'] === User::ROLE_RESIDENT) {
             return response()->json(['message' => 'Staff and administrator accounts cannot be changed to resident.'], 422);
         }
-        // The administrator changes their own password with "Change password" (which asks for the current one),
-        // so a session left open cannot be used to take over the account.
-        if ((int) $user->user_id === (int) $request->user()->user_id && ! empty($data['password'])) {
-            throw ValidationException::withMessages(['password' => 'To change your own password, use "Change password" in the menu.']);
-        }
         // Prevents the administrator from locking themselves out of the admin pages.
         if ((int) $user->user_id === (int) $request->user()->user_id && $data['role'] !== $user->role) {
             return response()->json(['message' => 'You cannot change the role of your own account.'], 422);
         }
 
         $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null, 'role' => $data['role']]);
-        if (! empty($data['password'])) {
-            // A password set by the administrator is temporary (e.g. a forgotten password): the user must
-            // change it at their next log-in, and is logged out everywhere now.
-            $user->setTemporaryPassword($data['password']);
-            $user->tokens()->delete();
-        }
         $user->save();
 
         if ($user->resident) {
@@ -87,6 +86,28 @@ class UserController extends Controller
         }
 
         return $user->load('resident');
+    }
+
+    /**
+     * Reset password (e.g. a lost temporary password): a new temporary password replaces the old one, the
+     * user is logged out everywhere and must change it at the next log-in. The old password is never shown.
+     */
+    public function resetPassword(Request $request, User $user)
+    {
+        // Own password: "Change password" in the menu, which asks for the current password.
+        if ((int) $user->user_id === (int) $request->user()->user_id) {
+            return response()->json(['message' => 'To change your own password, use "Change password" in the menu.'], 422);
+        }
+        if (! $user->is_active) {
+            return response()->json(['message' => 'Activate this account first, then reset its password.'], 422);
+        }
+
+        $temporary = TemporaryPassword::generate([$user->name, $user->email, $user->resident?->contact_no]);
+        $user->setTemporaryPassword($temporary);
+        $user->save();
+        $user->tokens()->delete();
+
+        return $this->withTemporaryPassword($user, $temporary);
     }
 
     public function toggleActive(Request $request, User $user)
@@ -101,5 +122,13 @@ class UserController extends Controller
         }
 
         return $user;
+    }
+
+    /** The only responses that contain a password (shown once): never cached by the browser or a proxy. */
+    private function withTemporaryPassword(User $user, string $temporary, int $status = 200)
+    {
+        return response()->json(['user' => $user->fresh('resident'), 'temporary_password' => $temporary], $status)
+            ->header('Cache-Control', 'no-store, private')
+            ->header('Pragma', 'no-cache');
     }
 }

@@ -129,6 +129,7 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
         Route::post('/users', [UserController::class, 'store']);
         Route::put('/users/{user}', [UserController::class, 'update']);
         Route::post('/users/{user}/toggle-active', [UserController::class, 'toggleActive']);
+        Route::post('/users/{user}/reset-password', [UserController::class, 'resetPassword']);
 
         Route::post('/notifications/announce', [NotificationController::class, 'announce']);
 
