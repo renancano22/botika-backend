@@ -7,7 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 
 /**
- * Server-side pagination for the data tables (rows per page: 5, 10, 25 or 50).
+ * Server-side pagination for the data tables (rows per page: 5 by default, or 10, 25 or 50).
  *
  * A list is paginated when the request has ?per_page= or ?page=. The response is
  *   { data: [...one page...], meta: { current_page, per_page, total, last_page, from, to }, ...extra }
@@ -20,7 +20,7 @@ use Illuminate\Support\Collection;
  */
 class Listing
 {
-    public const DEFAULT_PER_PAGE = 10;
+    public const DEFAULT_PER_PAGE = 5;
     public const MAX_PER_PAGE = 100;
 
     /** Does this request ask for one page (a data table) instead of the whole list? */
