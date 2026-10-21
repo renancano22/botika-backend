@@ -7,6 +7,7 @@ use App\Models\Inventory;
 use App\Models\Medicine;
 use App\Models\User;
 use App\Services\InventoryService;
+use App\Support\Listing;
 use App\Support\MedicineCatalog;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -32,7 +33,7 @@ class MedicineController extends Controller
             ->orderBy('generic_name')->orderBy('medicine_name')
             ->get();
 
-        return $medicines->map(function (Medicine $m) use ($isResident, $reserved, $today, $warnUntil) {
+        $rows = $medicines->map(function (Medicine $m) use ($isResident, $reserved, $today, $warnUntil) {
             $onShelf = (int) ($m->available_stock ?? 0);
             $reservedQty = $reserved[$m->medicine_id] ?? 0;
             $free = max(0, $onShelf - $reservedQty);
@@ -73,6 +74,19 @@ class MedicineController extends Controller
             }
             return $row;
         });
+
+        // Data table (?per_page=): the stock status is worked out above, so the list is filtered by it here
+        // (?status=) and then one page is sent. "unrecorded" counts every matching medicine, not only the page.
+        if (Listing::wanted($request)) {
+            $status = (string) $request->input('status', '');
+            return Listing::paginateCollection(
+                $status !== '' ? $rows->where('status', $status)->values() : $rows,
+                $request,
+                ['unrecorded' => $rows->where('status', 'unrecorded')->count()],
+            );
+        }
+
+        return $rows;
     }
 
     /** The Botika's 18 categories first, then any other category still used by a medicine. */

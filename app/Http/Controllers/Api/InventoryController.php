@@ -7,6 +7,7 @@ use App\Models\Inventory;
 use App\Models\Medicine;
 use App\Models\StockTransaction;
 use App\Services\InventoryService;
+use App\Support\Listing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -16,22 +17,46 @@ class InventoryController extends Controller
 {
     public function __construct(private InventoryService $inventory) {}
 
+    /**
+     * Stock batches (batches with stock left; ?expiry=empty lists the used-up ones, which are kept as history).
+     * Data table (?per_page=): one page, with ?search= (medicine), ?expiry=expired|near_expiry|ok|empty,
+     * ?sort=expiry (earliest expiration first) | expiry_desc | newest, and ?focus=<batch id> to open the
+     * page that contains that batch (expiry alerts).
+     */
     public function index(Request $request)
     {
         $today = now()->toDateString();
         $warnUntil = InventoryService::nearExpiryCutoff();
+        $withStatus = fn ($batches) => $batches->map(function (Inventory $b) use ($today, $warnUntil) {
+            $exp = $b->expiration_date->toDateString();
+            $b->setAttribute('expiry_status', $exp <= $today ? 'expired' : ($exp <= $warnUntil ? 'near_expiry' : 'ok'));
+            return $b;
+        });
+        $expiry = (string) $request->input('expiry', '');
+        $search = Listing::search($request);
 
-        return Inventory::with('medicine:medicine_id,medicine_name,generic_name,strength,dosage_form,category,unit')
+        $query = Inventory::with('medicine:medicine_id,medicine_name,generic_name,strength,dosage_form,category,unit')
             ->when($request->medicine_id, fn ($q, $id) => $q->where('medicine_id', $id))
-            ->when(! $request->boolean('include_empty'), fn ($q) => $q->where('quantity', '>', 0))
-            ->when($request->search, fn ($q, $s) => $q->whereHas('medicine', fn ($m) => $m->where('medicine_name', 'like', "%{$s}%")))
-            ->orderBy('expiration_date')
-            ->get()
-            ->map(function (Inventory $b) use ($today, $warnUntil) {
-                $exp = $b->expiration_date->toDateString();
-                $b->setAttribute('expiry_status', $exp <= $today ? 'expired' : ($exp <= $warnUntil ? 'near_expiry' : 'ok'));
-                return $b;
-            });
+            ->when($expiry === 'empty', fn ($q) => $q->where('quantity', '<=', 0),
+                fn ($q) => $q->when(! $request->boolean('include_empty'), fn ($w) => $w->where('quantity', '>', 0)))
+            ->when($expiry === 'expired', fn ($q) => $q->whereDate('expiration_date', '<=', $today))
+            ->when($expiry === 'near_expiry', fn ($q) => $q->whereDate('expiration_date', '>', $today)->whereDate('expiration_date', '<=', $warnUntil))
+            ->when($expiry === 'ok', fn ($q) => $q->whereDate('expiration_date', '>', $warnUntil))
+            ->when(Listing::number($request) !== null, fn ($q) => $q->where('inventory_id', Listing::number($request)))
+            ->when($search !== '' && Listing::number($request) === null, fn ($q) => $q->where(fn ($w) => $w
+                ->when(ctype_digit($search), fn ($x) => $x->orWhere('inventory_id', (int) $search))
+                ->orWhereHas('medicine', fn ($m) => $m->where('medicine_name', 'like', Listing::like($search))->orWhere('generic_name', 'like', Listing::like($search)))));
+
+        if (Listing::wanted($request)) {
+            match (Listing::sort($request, ['expiry', 'expiry_desc', 'newest'])) {
+                'expiry' => $query->orderBy('expiration_date')->orderBy('inventory_id'),
+                'expiry_desc' => $query->orderByDesc('expiration_date')->orderByDesc('inventory_id'),
+                'newest' => $query->orderByDesc('inventory_id'),
+            };
+            return Listing::paginate($query, $request, $withStatus, [], 'inventory_id');
+        }
+
+        return $withStatus($query->orderBy('expiration_date')->orderBy('inventory_id')->get());
     }
 
     public function stockIn(Request $request)
@@ -95,7 +120,10 @@ class InventoryController extends Controller
             ->load('medicine'));
     }
 
-    /** Stock-in / stock-out / dispensed history (audit trail of every quantity change). */
+    /**
+     * Stock-in / stock-out / dispensed history (audit trail of every quantity change), newest first.
+     * Data table (?per_page=): one page, with ?type=, ?search= (medicine or batch no.), ?from= / ?to= and ?sort=newest|oldest.
+     */
     public function transactions(Request $request)
     {
         $request->validate([
@@ -104,20 +132,27 @@ class InventoryController extends Controller
             'to' => 'nullable|date|after_or_equal:from',
             'medicine_id' => 'nullable|integer',
         ], ['to.after_or_equal' => 'The end date must be on or after the start date.']);
+        $search = Listing::search($request);
+        $withReason = fn ($rows) => $rows->each(function (StockTransaction $t) {
+            $t->setAttribute('reason_text', $t->reasonText());
+            $t->unsetRelation('dispensing'); // only the text is needed (keeps the list light)
+        });
 
-        return StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name', ...StockTransaction::REASON_RELATIONS])
+        $query = StockTransaction::with(['medicine:medicine_id,medicine_name,unit', 'batch:inventory_id,expiration_date', 'performer:user_id,name', ...StockTransaction::REASON_RELATIONS])
             ->when($request->type, fn ($q, $t) => $q->where('type', $t))
             ->when($request->medicine_id, fn ($q, $id) => $q->where('medicine_id', $id))
-            ->when($request->from, fn ($q, $d) => $q->whereDate('created_at', '>=', $d))
-            ->when($request->to, fn ($q, $d) => $q->whereDate('created_at', '<=', $d))
-            ->orderByDesc('created_at')
-            ->orderByDesc('transaction_id')
-            ->limit(500)
-            ->get()
-            ->each(function (StockTransaction $t) {
-                $t->setAttribute('reason_text', $t->reasonText());
-                $t->unsetRelation('dispensing'); // only the text is needed (keeps the list light)
-            });
+            ->when(Listing::number($request) !== null, fn ($q) => $q->where('inventory_id', Listing::number($request)))
+            ->when($search !== '' && Listing::number($request) === null, fn ($q) => $q->where(fn ($w) => $w
+                ->when(ctype_digit($search), fn ($x) => $x->orWhere('inventory_id', (int) $search))
+                ->orWhereHas('medicine', fn ($m) => $m->where('medicine_name', 'like', Listing::like($search)))));
+        Listing::dateRange($query, $request, 'created_at');
+
+        if (Listing::wanted($request)) {
+            $dir = Listing::sort($request, ['newest', 'oldest']) === 'oldest' ? 'asc' : 'desc';
+            return Listing::paginate($query->orderBy('created_at', $dir)->orderBy('transaction_id', $dir), $request, $withReason);
+        }
+
+        return $withReason($query->orderByDesc('created_at')->orderByDesc('transaction_id')->limit(500)->get());
     }
 
     public function alerts()

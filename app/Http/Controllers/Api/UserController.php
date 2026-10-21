@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Support\Rules;
+use App\Support\Listing;
 use App\Support\TemporaryPassword;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -21,15 +22,31 @@ class UserController extends Controller
 {
     private const PASSWORD_PROHIBITED = 'Passwords cannot be set here. The system generates a temporary password (use Reset password).';
 
+    /**
+     * User accounts. Data table (?per_page=): one page, with ?role=, ?search= (name, email, mobile number or
+     * Resident ID), ?status=active|inactive and ?sort=name|newest|oldest.
+     */
     public function index(Request $request)
     {
-        return User::with('resident')
+        $search = Listing::search($request);
+        $query = User::with('resident')
             ->when($request->role, fn ($q, $role) => $q->where('role', $role))
-            ->when($request->search, fn ($q, $s) => $q->where(fn ($w) => $w
-                ->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%")
-                ->orWhereHas('resident', fn ($r) => $r->where('contact_no', 'like', "%{$s}%")->orWhere('qr_code', 'like', "%{$s}%"))))
-            ->orderBy('name')
-            ->get();
+            ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w
+                ->where('name', 'like', Listing::like($search))->orWhere('email', 'like', Listing::like($search))
+                ->orWhereHas('resident', fn ($r) => $r->where('contact_no', 'like', Listing::like($search))->orWhere('qr_code', 'like', Listing::like($search)))));
+
+        if (Listing::wanted($request)) {
+            $query->when($request->status === 'active', fn ($q) => $q->where('is_active', true))
+                ->when($request->status === 'inactive', fn ($q) => $q->where('is_active', false));
+            match (Listing::sort($request, ['name', 'newest', 'oldest'])) {
+                'name' => $query->orderBy('name')->orderBy('user_id'),
+                'newest' => $query->orderByDesc('created_at')->orderByDesc('user_id'),
+                'oldest' => $query->orderBy('created_at')->orderBy('user_id'),
+            };
+            return Listing::paginate($query, $request);
+        }
+
+        return $query->orderBy('name')->orderBy('user_id')->get();
     }
 
     public function store(Request $request)

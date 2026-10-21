@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\InventoryService;
 use App\Services\PermissionService;
 use App\Services\SmsService;
+use App\Support\Listing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -33,30 +34,58 @@ class RequestController extends Controller
 
     public function __construct(private InventoryService $inventory, private SmsService $sms) {}
 
+    /**
+     * Requests list, newest first. Residents only get their own requests.
+     * Data table (?per_page=): one page, with ?search= (request no., resident name or ID, medicine),
+     * ?from= / ?to= (request date), ?type=, ?status= and ?sort=newest|oldest.
+     */
     public function index(Request $request)
     {
         $user = $request->user();
 
-        return MedicineRequest::with(self::DETAILS)
-            ->when($user->role === User::ROLE_RESIDENT, fn ($q) => $q->where('resident_id', $user->resident?->resident_id))
-            ->when($request->type, fn ($q, $t) => $q->where('request_type', $t))
-            ->when($request->status, fn ($q, $s) => $q->where('status', $s))
-            ->orderByDesc('request_date')
-            ->limit(500)
+        if (Listing::wanted($request)) {
+            Listing::validateDates($request);
+            $dir = Listing::sort($request, ['newest', 'oldest']) === 'oldest' ? 'asc' : 'desc';
+            $query = $this->filtered($request)->with(self::DETAILS)->orderBy('request_date', $dir)->orderBy('request_id', $dir);
+            return Listing::paginate($query, $request);
+        }
+
+        return $this->filtered($request)->with(self::DETAILS)
+            ->orderByDesc('request_date')->orderByDesc('request_id')
+            ->when($user->role !== User::ROLE_RESIDENT, fn ($q) => $q->limit(500)) // residents get all of their own requests
             ->get();
     }
 
-    /** Staff/admin: number of requests in each status, e.g. {"pending": 3, "approved": 5, ...} (?type=medicine|restock). */
+    /** Staff/admin: number of requests in each status, e.g. {"pending": 3, "approved": 5, ...}, with the same filters as the list. */
     public function counts(Request $request)
     {
-        $counts = MedicineRequest::query()
-            ->when($request->type, fn ($q, $t) => $q->where('request_type', $t))
+        Listing::validateDates($request);
+        $counts = $this->filtered($request, false)
             ->selectRaw('status, COUNT(*) as total')
             ->groupBy('status')
             ->pluck('total', 'status')
             ->map(fn ($n) => (int) $n);
 
         return $counts->put('all', $counts->sum());
+    }
+
+    /** The filters shared by the list and the status counts (a resident only ever sees their own requests). */
+    private function filtered(Request $request, bool $withStatus = true)
+    {
+        $user = $request->user();
+        $search = Listing::search($request);
+
+        $query = MedicineRequest::query()
+            ->when($user->role === User::ROLE_RESIDENT, fn ($q) => $q->where('resident_id', $user->resident?->resident_id))
+            ->when($request->type, fn ($q, $t) => $q->where('request_type', $t))
+            ->when($withStatus && $request->status, fn ($q) => $q->where('status', $request->status))
+            ->when(Listing::number($request) !== null, fn ($q) => $q->where('request_id', Listing::number($request)))
+            ->when($search !== '' && Listing::number($request) === null, fn ($q) => $q->where(fn ($w) => $w
+                ->when(ctype_digit($search), fn ($x) => $x->orWhere('request_id', (int) $search))
+                ->orWhereHas('resident', fn ($r) => $r->where('name', 'like', Listing::like($search))->orWhere('qr_code', 'like', Listing::like($search)))
+                ->orWhereHas('items.medicine', fn ($m) => $m->where('medicine_name', 'like', Listing::like($search)))));
+
+        return Listing::dateRange($query, $request, 'request_date');
     }
 
     /** One request with its full status history (residents can only open their own). */

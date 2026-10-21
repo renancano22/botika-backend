@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Dispensing;
+use App\Models\DispensingItem;
 use App\Models\Medicine;
 use App\Models\MedicineRequest;
 use App\Models\Resident;
@@ -11,6 +12,7 @@ use App\Models\User;
 use App\Services\ForecastService;
 use App\Services\InventoryService;
 use App\Services\SmsService;
+use App\Support\Listing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -25,9 +27,41 @@ class DispensingController extends Controller
         private ForecastService $forecast,
     ) {}
 
+    /**
+     * Dispensing records (residents: their own medicine history), newest first.
+     * Data table (?per_page=): one page, with ?search= (request no., resident name or ID, medicine),
+     * ?from= / ?to= (date dispensed), ?sort=newest|oldest, and a summary of ALL matching records
+     * (number of records, residents served, total quantity), not only of the page shown.
+     */
     public function index(Request $request)
     {
         $user = $request->user();
+
+        if (Listing::wanted($request)) {
+            Listing::validateDates($request);
+            $search = Listing::search($request);
+            $base = Dispensing::query()
+                ->when($user->role === User::ROLE_RESIDENT, fn ($q) => $q->whereHas('request',
+                    fn ($r) => $r->where('resident_id', $user->resident?->resident_id)))
+                ->when(Listing::number($request) !== null, fn ($q) => $q->where('request_id', Listing::number($request)))
+                ->when($search !== '' && Listing::number($request) === null, fn ($q) => $q->where(fn ($w) => $w
+                    ->when(ctype_digit($search), fn ($x) => $x->orWhere('request_id', (int) $search))
+                    ->when($user->role !== User::ROLE_RESIDENT, fn ($x) => $x->orWhereHas('request.resident', fn ($r) => $r
+                        ->where('name', 'like', Listing::like($search))->orWhere('qr_code', 'like', Listing::like($search))))
+                    ->orWhereHas('items.medicine', fn ($m) => $m->where('medicine_name', 'like', Listing::like($search)))));
+            Listing::dateRange($base, $request, 'dispensed_at');
+
+            $summary = [
+                'records' => (clone $base)->count(),
+                'residents' => MedicineRequest::whereIn('request_id', (clone $base)->select('request_id'))->distinct()->count('resident_id'),
+                'total_quantity' => (int) DispensingItem::whereIn('dispensing_id', (clone $base)->select('dispensing_id'))->sum('quantity'),
+            ];
+            $dir = Listing::sort($request, ['newest', 'oldest']) === 'oldest' ? 'asc' : 'desc';
+            $query = (clone $base)->with(['items.medicine:medicine_id,medicine_name,unit', 'request.resident', 'dispenser:user_id,name'])
+                ->orderBy('dispensed_at', $dir)->orderBy('dispensing_id', $dir);
+
+            return Listing::paginate($query, $request, null, ['summary' => $summary]);
+        }
 
         return Dispensing::with(['items.medicine:medicine_id,medicine_name,unit', 'request.resident', 'dispenser:user_id,name'])
             ->when($user->role === User::ROLE_RESIDENT, fn ($q) => $q->whereHas('request',

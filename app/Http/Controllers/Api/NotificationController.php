@@ -7,6 +7,7 @@ use App\Models\Notification;
 use App\Models\Resident;
 use App\Models\User;
 use App\Services\SmsService;
+use App\Support\Listing;
 use Illuminate\Http\Request;
 
 /** Notification System (Objective 3.3). */
@@ -21,14 +22,37 @@ class NotificationController extends Controller
 
     public function __construct(private SmsService $sms) {}
 
+    /**
+     * Notifications, newest first (residents: their own, all of them).
+     * Data table (?per_page=, the administrator's SMS log): one page, with ?search= (resident, mobile number or
+     * message), ?status=sent|failed|logged|app, ?from= / ?to= (date sent) and ?sort=newest|oldest.
+     */
     public function index(Request $request)
     {
         $user = $request->user();
+        $resident = $user->role === User::ROLE_RESIDENT;
+        $query = Notification::with('resident:resident_id,name,contact_no')
+            ->when($resident, fn ($q) => $q->where('resident_id', $user->resident?->resident_id));
 
-        return Notification::with('resident:resident_id,name,contact_no')
-            ->when($user->role === User::ROLE_RESIDENT, fn ($q) => $q->where('resident_id', $user->resident?->resident_id))
-            ->orderByDesc('sent_at')
-            ->limit(300)
+        if (Listing::wanted($request)) {
+            Listing::validateDates($request);
+            $search = Listing::search($request);
+            $status = (string) $request->input('status', '');
+            $query
+                ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w
+                    ->where('message', 'like', Listing::like($search))
+                    ->when(! $resident, fn ($x) => $x->orWhereHas('resident', fn ($r) => $r
+                        ->where('name', 'like', Listing::like($search))->orWhere('contact_no', 'like', Listing::like($search))))))
+                ->when($status === 'app', fn ($q) => $q->where('channel', 'app'))
+                ->when(in_array($status, ['sent', 'failed', 'logged'], true), fn ($q) => $q->where('channel', '!=', 'app')->where('status', $status));
+            Listing::dateRange($query, $request, 'sent_at');
+            $dir = Listing::sort($request, ['newest', 'oldest']) === 'oldest' ? 'asc' : 'desc';
+
+            return Listing::paginate($query->orderBy('sent_at', $dir)->orderBy('notification_id', $dir), $request);
+        }
+
+        return $query->orderByDesc('sent_at')->orderByDesc('notification_id')
+            ->when(! $resident, fn ($q) => $q->limit(300)) // residents get all of their own notifications
             ->get();
     }
 

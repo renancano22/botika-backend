@@ -11,6 +11,7 @@ use App\Models\Report;
 use App\Models\RequestItem;
 use App\Models\StockTransaction;
 use App\Services\InventoryService;
+use App\Support\Listing;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -32,10 +33,23 @@ class ReportController extends Controller
 
     public function __construct(private InventoryService $inventory) {}
 
-    /** History of generated reports (REPORTS entity). */
-    public function index()
+    /**
+     * History of generated reports (REPORTS entity), newest first.
+     * Data table (?per_page=): one page, with ?type=, ?from= / ?to= (date generated) and ?sort=newest|oldest.
+     */
+    public function index(Request $request)
     {
-        return Report::with('generator:user_id,name')->orderByDesc('generated_at')->limit(100)->get();
+        $query = Report::with('generator:user_id,name');
+
+        if (Listing::wanted($request)) {
+            Listing::validateDates($request);
+            $query->when(array_key_exists((string) $request->input('type'), self::TYPES), fn ($q) => $q->where('report_type', $request->input('type')));
+            Listing::dateRange($query, $request, 'generated_at');
+            $dir = Listing::sort($request, ['newest', 'oldest']) === 'oldest' ? 'asc' : 'desc';
+            return Listing::paginate($query->orderBy('generated_at', $dir)->orderBy('report_id', $dir), $request);
+        }
+
+        return $query->orderByDesc('generated_at')->orderByDesc('report_id')->limit(100)->get();
     }
 
     public function generate(Request $request, string $type)
