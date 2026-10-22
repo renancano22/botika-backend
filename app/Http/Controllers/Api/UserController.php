@@ -3,12 +3,18 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\TemporaryPasswordMail;
 use App\Models\User;
+use App\Services\SmsService;
 use App\Support\Rules;
 use App\Support\Listing;
 use App\Support\TemporaryPassword;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 /**
  * Admin: Manage User Accounts (create, view, edit, deactivate) - Fig. 4.4.
@@ -17,6 +23,8 @@ use Illuminate\Validation\Rule;
  * created, or its password is reset, the server generates a temporary password, stores only its hash and
  * returns the plain password once, in that response only. The user must change it at the first log-in,
  * and only they know the password they choose.
+ * Resident accounts: a reset password is sent only to the resident (SMS to their mobile number and email),
+ * and is never shown to the administrator.
  */
 class UserController extends Controller
 {
@@ -120,11 +128,75 @@ class UserController extends Controller
         }
 
         $temporary = TemporaryPassword::generate([$user->name, $user->email, $user->resident?->contact_no], $user);
+
+        if ($user->role === User::ROLE_RESIDENT) {
+            return $this->sendResidentPassword($user, $temporary);
+        }
+
         $user->setTemporaryPassword($temporary);
         $user->save();
         $user->tokens()->delete();
 
         return $this->withTemporaryPassword($user, $temporary);
+    }
+
+    /**
+     * Resident accounts: the temporary password goes only to the resident, by SMS to their registered mobile
+     * number and by email (when they have one). The administrator only sees where it was sent. If it could
+     * not be sent anywhere, nothing is changed (the resident keeps their current password).
+     */
+    private function sendResidentPassword(User $user, string $temporary)
+    {
+        $sms = app(SmsService::class);
+        $mobile = $user->resident?->contact_no;
+        $email = $user->email;
+        $mailReady = config('mail.default') !== 'log'; // the "log" mailer would write the password to the log file
+
+        if (! $mobile && ! $email) {
+            return response()->json(['message' => 'This resident has no mobile number or email address, so a new password cannot be sent to them.'], 422);
+        }
+        if (! ($mobile && $sms->ready()) && ! ($email && $mailReady)) {
+            return response()->json(['message' => 'The new password cannot be sent because SMS and email are not set up on the server yet. '
+                . 'The resident\'s current password was not changed.'], 422);
+        }
+
+        DB::beginTransaction();
+        try {
+            $user->setTemporaryPassword($temporary);
+            $user->save();
+            $expires = $user->temp_password_expires_at->format('M j, Y g:i A');
+            $sent = ['sms' => null, 'email' => null];
+
+            if ($mobile && $sms->ready()) {
+                $text = "BulanBotikaCare: Your password was reset by the administrator. Temporary password: {$temporary} "
+                    . "Log in and change it right away. It expires on {$expires}. Do not share it with anyone.";
+                if ($sms->sendTo($mobile, $text, secret: true) === 'sent') {
+                    $sent['sms'] = $mobile;
+                }
+            }
+            if ($email && $mailReady) {
+                try {
+                    Mail::to($email)->send(new TemporaryPasswordMail($user->name, $temporary, $expires));
+                    $sent['email'] = $email;
+                } catch (Throwable $e) {
+                    Log::warning('Temporary password email failed: ' . get_class($e)); // never the message (it has the password)
+                }
+            }
+        } catch (Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        if (! $sent['sms'] && ! $sent['email']) {
+            DB::rollBack(); // the resident keeps the current password
+            return response()->json(['message' => 'The new password could not be sent to the resident by SMS or email. '
+                . 'Their current password was not changed. Please try again later.'], 422);
+        }
+        DB::commit();
+
+        $user->tokens()->delete(); // logged out on every device
+
+        return response()->json(['user' => $user->fresh('resident'), 'sent_to' => $sent]);
     }
 
     public function toggleActive(Request $request, User $user)

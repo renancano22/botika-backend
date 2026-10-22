@@ -62,21 +62,28 @@ class SmsService
     }
 
     /**
-     * Sends an SMS without saving it to the notifications log (used for password reset codes).
+     * Sends an SMS without saving it to the notifications log (used for password reset codes and temporary
+     * passwords). $secret: the message contains a password, so it is never written to the log.
      * @return string sent | failed | logged
      */
-    public function sendTo(string $number, string $message): string
+    public function sendTo(string $number, string $message, bool $secret = false): string
     {
-        return $this->send($number, $message);
+        return $this->send($number, $message, $secret);
+    }
+
+    /** SMS can really be sent (a Semaphore API key is set). */
+    public function ready(): bool
+    {
+        return ! empty(config('sms.semaphore.api_key'));
     }
 
     /** @return string sent | failed | logged */
-    protected function send(string $number, string $message): string
+    protected function send(string $number, string $message, bool $secret = false): string
     {
         $apiKey = config('sms.semaphore.api_key');
 
         if (empty($apiKey)) {
-            Log::info("[SMS not sent - no SEMAPHORE_API_KEY] to {$number}: {$message}");
+            Log::info("[SMS not sent - no SEMAPHORE_API_KEY] to {$number}: " . ($secret ? '(message hidden: it contains a password)' : $message));
             return 'logged';
         }
 
@@ -91,9 +98,9 @@ class SmsService
             if ($response->successful()) {
                 return 'sent';
             }
-            Log::warning('Semaphore SMS failed: ' . $response->body());
+            Log::warning('Semaphore SMS failed: ' . ($secret ? 'HTTP ' . $response->status() : $response->body()));
         } catch (Throwable $e) {
-            Log::warning('Semaphore SMS error: ' . $e->getMessage());
+            Log::warning('Semaphore SMS error: ' . ($secret ? get_class($e) : $e->getMessage()));
         }
 
         return 'failed';
