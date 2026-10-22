@@ -37,7 +37,9 @@ class DashboardController extends Controller
      * for it (every 30 seconds). Sections follow User Permissions: staff only get the parts of the dashboard
      * whose module they may open (the administrator gets everything).
      *  - "As of now": live counts and lists (pending requests, ready for pickup, stock status, expiry).
-     *  - "analytics": requests and dispensing within a period (?from= / ?to=, default: the last 6 months).
+     *  - Administrator only (paper: user management, restock approval, Process 5.0 reporting and analytics):
+     *    the number of residents and staff, pending restock requests and "analytics" — requests and
+     *    dispensing within a period (?from= / ?to=, default: the last 6 months).
      */
     private function operations(Request $request, User $user): array
     {
@@ -46,10 +48,11 @@ class DashboardController extends Controller
             'stock' => collect(['medicines.view', 'medicines.manage', 'inventory.view', 'inventory.manage'])->contains(fn ($p) => $user->hasPermission($p)),
             'dispensing' => $user->hasPermission('dispensing.records'),
         ];
-        $counts = [
+        $isAdmin = $user->role === User::ROLE_ADMIN;
+        $counts = $isAdmin ? [
             'residents' => Resident::count(),
             'staff' => User::where('role', User::ROLE_STAFF)->where('is_active', true)->count(), // active pharmacy staff
-        ];
+        ] : [];
         $data = ['sections' => $sections];
 
         if ($sections['stock']) {
@@ -72,10 +75,10 @@ class DashboardController extends Controller
             $counts += [
                 'pending_requests' => MedicineRequest::where('request_type', 'medicine')->where('status', 'pending')->count(),
                 'approved_to_dispense' => MedicineRequest::where('request_type', 'medicine')->where('status', 'approved')->count(),
-                'pending_restock' => MedicineRequest::where('request_type', 'restock')->where('status', 'pending')->count(),
             ];
-            $data['recent_requests'] = MedicineRequest::with(['items.medicine:medicine_id,medicine_name', 'resident:resident_id,name'])
-                ->where('status', 'pending')->orderBy('request_date')->orderBy('request_id')->limit(8)->get();
+            if ($isAdmin) { // restock requests are reviewed by the administrator
+                $counts['pending_restock'] = MedicineRequest::where('request_type', 'restock')->where('status', 'pending')->count();
+            }
             // Approved medicine requests waiting to be claimed: whose they are and until when (oldest deadline first).
             $data['ready_for_pickup'] = MedicineRequest::with([
                 'items.medicine:medicine_id,medicine_name,unit',
@@ -91,7 +94,7 @@ class DashboardController extends Controller
         }
 
         $data['counts'] = $counts;
-        if ($sections['requests'] || $sections['dispensing']) {
+        if ($isAdmin) {
             $data['analytics'] = $this->analytics($request, $sections);
         }
 

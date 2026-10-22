@@ -173,7 +173,8 @@ class DashboardTest extends TestCase
         $id = $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $med->medicine_id, 'quantity' => 10]]],
             ['Authorization' => 'Bearer ' . $reg->json('token')])->assertCreated()->json('request_id');
 
-        $this->getJson('/api/dashboard', $this->token($staff))->assertOk()
+        $this->getJson('/api/dashboard', $this->token($staff))->assertOk()->assertJsonPath('counts.pending_requests', 1);
+        $this->getJson('/api/dashboard', $this->token($admin))->assertOk()
             ->assertJsonPath('counts.pending_requests', 1)
             ->assertJsonPath('analytics.requests.total', 1)->assertJsonPath('analytics.requests.by_status.pending', 1)
             ->assertJsonPath('analytics.requests.quantity_requested', 10)
@@ -184,6 +185,8 @@ class DashboardTest extends TestCase
 
         // The same request is still counted once, now as dispensed; the stock went down by the quantity given.
         $this->getJson('/api/dashboard', $this->token($staff))->assertOk()
+            ->assertJsonPath('counts.pending_requests', 0)->assertJsonPath('counts.dispensed_today', 1);
+        $this->getJson('/api/dashboard', $this->token($admin))->assertOk()
             ->assertJsonPath('counts.pending_requests', 0)->assertJsonPath('counts.dispensed_today', 1)
             ->assertJsonPath('analytics.requests.total', 1)->assertJsonPath('analytics.requests.by_status.dispensed', 1)
             ->assertJsonPath('analytics.dispensing', ['releases' => 1, 'quantity' => 10, 'residents' => 1])
@@ -197,19 +200,23 @@ class DashboardTest extends TestCase
         $admin = User::factory()->admin()->create();
         $staff = User::factory()->create();
 
-        // Staff without access to requests: no request numbers, lists or request analysis.
+        // Pharmacy staff: their work as of now; Demand Analysis, the number of residents and staff and the pending
+        // restock requests are for the administrator (paper: Process 5.0, user management, restock approval).
+        $this->getJson('/api/dashboard', $this->token($staff))->assertOk()
+            ->assertJsonPath('counts.pending_requests', 1)->assertJsonCount(1, 'ready_for_pickup')
+            ->assertJsonMissingPath('analytics')->assertJsonMissingPath('counts.pending_restock')
+            ->assertJsonMissingPath('counts.residents')->assertJsonMissingPath('counts.staff')->assertJsonMissingPath('recent_requests');
+
+        // Staff without access to requests: no request numbers or lists.
         $this->putJson('/api/permissions/staff', ['permissions' => ['requests.view' => false]], $this->token($admin))->assertOk();
         $res = $this->getJson('/api/dashboard', $this->token($staff))->assertOk()
             ->assertJsonPath('sections', ['requests' => false, 'stock' => true, 'dispensing' => true])
-            ->assertJsonMissingPath('recent_requests')->assertJsonMissingPath('ready_for_pickup')->assertJsonMissingPath('counts.pending_requests')
-            ->assertJsonPath('analytics.requests', null)
-            ->assertJsonPath('analytics.dispensing.releases', 3) // Aug 15, Oct 2 and Oct 20 (default: last 6 months)
-            ->assertJsonPath('analytics.top_medicines.0.requests', 0); // dispensed quantities only
+            ->assertJsonMissingPath('ready_for_pickup')->assertJsonMissingPath('counts.pending_requests');
         $this->assertNotNull($res->json('counts.medicines'));
 
-        // Without dispensing records either: no demand analysis at all.
+        // Without dispensing records either: no "dispensed today".
         $this->putJson('/api/permissions/staff', ['permissions' => ['dispensing.records' => false]], $this->token($admin))->assertOk();
-        $this->getJson('/api/dashboard', $this->token($staff))->assertOk()->assertJsonMissingPath('analytics')->assertJsonMissingPath('counts.dispensed_today');
+        $this->getJson('/api/dashboard', $this->token($staff))->assertOk()->assertJsonMissingPath('counts.dispensed_today');
 
         // The administrator always sees everything; residents get their own dashboard only.
         $this->getJson('/api/dashboard', $this->token($admin))->assertJsonPath('sections', ['requests' => true, 'stock' => true, 'dispensing' => true]);
