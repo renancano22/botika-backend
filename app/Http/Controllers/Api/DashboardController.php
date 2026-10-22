@@ -85,7 +85,7 @@ class DashboardController extends Controller
                 'reviewer:user_id,name',
             ])
                 ->where('request_type', 'medicine')->where('status', 'approved')
-                ->orderBy('reviewed_at')->orderBy('request_id')->limit(10)->get();
+                ->orderBy('reviewed_at')->orderBy('request_id')->limit(5)->get(); // 5 rows, like every list (see all on Requests)
         }
 
         if ($sections['dispensing']) {
@@ -233,7 +233,7 @@ class DashboardController extends Controller
             ];
         })
             ->sortBy([['requests', 'desc'], ['quantity_dispensed', 'desc'], ['restock_requests', 'desc'], ['medicine_name', 'asc']])
-            ->take(10)->values()->all();
+            ->take(5)->values()->all(); // top 5
     }
 
     /** Resident dashboard: only the parts the resident may open (User Permissions). */
