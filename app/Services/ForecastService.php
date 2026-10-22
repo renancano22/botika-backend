@@ -294,6 +294,140 @@ class ForecastService
         return $h['by_medicine'][$medicineId] ?? $h['empty'];
     }
 
+    // ---------------------------------------------------------------- seasonal demand
+
+    /**
+     * The two seasons of the Philippines (PAGASA): the rainy season (June–November) and the dry season
+     * (December–May).
+     */
+    public const SEASONS = [
+        'rainy' => ['label' => 'Rainy season', 'months_label' => 'June – November', 'months' => [6, 7, 8, 9, 10, 11]],
+        'dry' => ['label' => 'Dry season', 'months_label' => 'December – May', 'months' => [12, 1, 2, 3, 4, 5]],
+    ];
+
+    /** Months of records a season needs (a whole season) before its expected demand is no longer provisional. */
+    public const SEASON_RECOMMENDED_MONTHS = 6;
+
+    public static function seasonOf(int $month): string
+    {
+        return in_array($month, self::SEASONS['rainy']['months'], true) ? 'rainy' : 'dry';
+    }
+
+    /** First and last day of the season that $date is in. @return array{0: Carbon, 1: Carbon} */
+    public static function seasonRange(Carbon $date): array
+    {
+        if (self::seasonOf($date->month) === 'rainy') {
+            return [Carbon::create($date->year, 6, 1)->startOfDay(), Carbon::create($date->year, 11, 30)->endOfDay()];
+        }
+        $startYear = $date->month === 12 ? $date->year : $date->year - 1;
+        return [Carbon::create($startYear, 12, 1)->startOfDay(), Carbon::create($startYear + 1, 5, 31)->endOfDay()];
+    }
+
+    /**
+     * Seasonal demand: which medicines were given out most in each season, and how much is expected per month
+     * and for a whole season, from the actual dispensing records (D5). Shown for information; the restock
+     * recommendation still uses the forecasting methods.
+     *
+     * The same rules as the forecast: months before the first dispensing record are "no data yet"; complete
+     * months only (a month with nothing dispensed counts as 0). While a season has no complete month yet,
+     * this month so far is used as a provisional basis (when this month is in that season).
+     */
+    public function seasonal(): array
+    {
+        $now = now();
+        $current = self::seasonOf($now->month);
+        [, $currentEnd] = self::seasonRange($now);
+        $next = $current === 'rainy' ? 'dry' : 'rainy';
+        $nextStart = $currentEnd->copy()->addDay()->startOfDay();
+        $firstMonth = self::firstRecordMonth();
+        $thisMonth = $now->format('Y-m');
+
+        // Complete months since the first record, sorted into seasons.
+        $used = ['rainy' => [], 'dry' => []];
+        if ($firstMonth !== null) {
+            for ($m = Carbon::createFromFormat('Y-m-d', $firstMonth . '-01')->startOfMonth(); $m->format('Y-m') < $thisMonth; $m->addMonthNoOverflow()) {
+                $used[self::seasonOf($m->month)][] = $m->format('Y-m');
+            }
+        }
+        $partial = ['rainy' => false, 'dry' => false];
+        if ($firstMonth !== null && ! $used[$current]) {
+            $used[$current] = [$thisMonth]; // provisional: this month so far
+            $partial[$current] = true;
+        }
+
+        $rows = $firstMonth === null ? collect() : DispensingItem::query()
+            ->join('dispensing', 'dispensing.dispensing_id', '=', 'dispensing_items.dispensing_id')
+            ->join('requests', 'requests.request_id', '=', 'dispensing.request_id')
+            ->where('dispensing.dispensed_at', '>=', $firstMonth . '-01')
+            ->where('dispensing.dispensed_at', '<', self::forecastStart())
+            ->get(['dispensing_items.medicine_id', 'dispensing_items.quantity', 'dispensing.dispensing_id', 'dispensing.dispensed_at', 'requests.resident_id']);
+
+        // [season => [medicine_id => [total, dispensing ids, resident ids]]]
+        $agg = ['rainy' => [], 'dry' => []];
+        foreach ($rows as $row) {
+            $at = Carbon::parse($row->dispensed_at);
+            $season = self::seasonOf($at->month);
+            if (! in_array($at->format('Y-m'), $used[$season], true)) continue;
+            $a = &$agg[$season][$row->medicine_id];
+            $a ??= ['total' => 0, 'times' => [], 'residents' => []];
+            $a['total'] += (int) $row->quantity;
+            $a['times'][$row->dispensing_id] = true;
+            $a['residents'][$row->resident_id] = true;
+            unset($a);
+        }
+
+        $medicines = Medicine::whereIn('medicine_id', array_unique([...array_keys($agg['rainy']), ...array_keys($agg['dry'])]))
+            ->get(['medicine_id', 'medicine_name', 'unit'])->keyBy('medicine_id');
+        $perMonth = fn (string $season, int $medicineId) => count($used[$season]) ? ($agg[$season][$medicineId]['total'] ?? 0) / count($used[$season]) : null;
+        $seasonLength = count(self::SEASONS['rainy']['months']);
+
+        $seasons = [];
+        foreach (self::SEASONS as $key => $def) {
+            $other = $key === 'rainy' ? 'dry' : 'rainy';
+            $months = count($used[$key]);
+            $list = [];
+            foreach ($agg[$key] as $medicineId => $a) {
+                $avg = $a['total'] / $months;
+                $otherAvg = $perMonth($other, $medicineId);
+                $list[] = [
+                    'medicine_id' => $medicineId,
+                    'medicine_name' => $medicines[$medicineId]->medicine_name ?? 'Deleted medicine',
+                    'unit' => $medicines[$medicineId]->unit ?? '',
+                    'total' => $a['total'],
+                    'avg_per_month' => round($avg, 1),
+                    'expected_season' => (int) round($avg * $seasonLength),
+                    'times_dispensed' => count($a['times']),
+                    'residents' => count($a['residents']),
+                    // Compared with the other season (null = no records from the other season yet).
+                    'other_avg_per_month' => $otherAvg === null ? null : round($otherAvg, 1),
+                    'change_percent' => $otherAvg ? (int) round(($avg - $otherAvg) / $otherAvg * 100) : null,
+                    'only_this_season' => $otherAvg === 0.0 || $otherAvg === 0,
+                ];
+            }
+            usort($list, fn ($x, $y) => [$y['avg_per_month'], $x['medicine_name']] <=> [$x['avg_per_month'], $y['medicine_name']]);
+
+            $seasons[] = [
+                'key' => $key,
+                'label' => $def['label'],
+                'months_label' => $def['months_label'],
+                'is_current' => $key === $current,
+                'starts' => $key === $current ? self::seasonRange($now)[0]->toDateString() : $nextStart->toDateString(),
+                'ends' => $key === $current ? $currentEnd->toDateString() : self::seasonRange($nextStart)[1]->toDateString(),
+                'months_used' => $used[$key],
+                'partial' => $partial[$key],
+                'provisional' => $months > 0 && ($partial[$key] || $months < self::SEASON_RECOMMENDED_MONTHS),
+                'medicines' => $list, // per medicine (different units are never added together)
+            ];
+        }
+
+        return [
+            'current' => $current,
+            'next' => $next,
+            'first_record' => self::firstRecordDate(),
+            'seasons' => $seasons,
+        ];
+    }
+
     /** Barangays with the most approved medicine requests since $since (top 5). */
     public function topBarangays(Carbon $since, int $limit = 5): array
     {

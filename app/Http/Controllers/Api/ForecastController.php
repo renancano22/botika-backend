@@ -30,6 +30,12 @@ class ForecastController extends Controller
         return $data + ['saved' => true];
     }
 
+    /** Seasonal demand: medicines given out most in the rainy and dry seasons, from the dispensing records. */
+    public function seasonal()
+    {
+        return $this->forecast->seasonal();
+    }
+
     public function show(Medicine $medicine)
     {
         return $this->forecast->forecastMedicine($medicine);

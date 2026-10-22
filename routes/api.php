@@ -142,6 +142,7 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
 
         Route::get('/forecasts', [ForecastController::class, 'index']);
         Route::post('/forecasts/generate', [ForecastController::class, 'generate']);
+        Route::get('/forecasts/seasonal', [ForecastController::class, 'seasonal']);
         Route::get('/forecasts/{medicine}', [ForecastController::class, 'show']);
     });
 });
