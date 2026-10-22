@@ -41,9 +41,9 @@ return [
     ],
 
     /*
-     * Features that are used on the page of another feature: [feature => the feature it needs].
-     * A feature is off whenever the one it needs is off (it could not be reached anyway), and turning it on
-     * also turns on the one it needs (Admin → User Permissions shows this).
+     * Features that are used on the page of another feature: [feature => the feature(s) it needs].
+     * A feature is off whenever one it needs is off (it could not be reached anyway), and turning it on
+     * also turns on the ones it needs (Admin → User Permissions shows this).
      */
     'requires' => [
         'staff' => [
@@ -52,8 +52,10 @@ return [
             'requests.review' => 'requests.view',     // approved / rejected on the Requests page
         ],
         'resident' => [
-            'requests.create' => 'medicines.view',    // requests are made on Check Medicines
-            'restock.create' => 'medicines.view',     // restock requests too
+            // Requests are made on Check Medicines, and the resident then follows them in My Requests
+            // (status, pickup date, prescription upload, editing a pending request).
+            'requests.create' => ['medicines.view', 'requests.view'],
+            'restock.create' => ['medicines.view', 'requests.view'],
             'requests.cancel' => 'requests.view',     // cancelled from My Requests
         ],
     ],

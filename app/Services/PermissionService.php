@@ -21,10 +21,10 @@ class PermissionService
         return config("permissions.permissions.{$role}", []);
     }
 
-    /** [feature => the feature it needs] for a role (config permissions.requires). */
+    /** @return array<string, string[]> [feature => the features it needs] for a role (config permissions.requires). */
     public function requires(string $role): array
     {
-        return config("permissions.requires.{$role}", []);
+        return array_map(fn ($needed) => (array) $needed, config("permissions.requires.{$role}", []));
     }
 
     /**
@@ -42,8 +42,10 @@ class PermissionService
             $result[$key] = (bool) ($saved[$key] ?? $def[3]);
         }
         foreach ($this->requires($role) as $key => $needed) {
-            if (isset($result[$key]) && ! ($result[$needed] ?? false)) {
-                $result[$key] = false;
+            foreach ($needed as $n) {
+                if (isset($result[$key]) && ! ($result[$n] ?? false)) {
+                    $result[$key] = false;
+                }
             }
         }
         return $this->cache[$role] = $result;
@@ -78,13 +80,20 @@ class PermissionService
         foreach ($permissions as $key => $allowed) {
             if (isset($catalog[$key])) $final[$key] = (bool) $allowed;
         }
-        foreach ($this->requires($role) as $key => $needed) {
-            $neededOff = array_key_exists($needed, $permissions) && ! $permissions[$needed];
+        $requires = $this->requires($role);
+        foreach ($requires as $key => $needed) {
+            $neededOff = collect($needed)->contains(fn ($n) => array_key_exists($n, $permissions) && ! $permissions[$n]);
             if (! empty($permissions[$key]) && ! $neededOff) {
-                $final[$needed] = true;            // turned on → what it needs is turned on too
+                foreach ($needed as $n) {
+                    $final[$n] = true;             // turned on → what it needs is turned on too
+                }
             }
-            if (! $final[$needed]) {
-                $final[$key] = false;              // what it needs is off → it is off too
+        }
+        foreach ($requires as $key => $needed) {
+            foreach ($needed as $n) {
+                if (! $final[$n]) {
+                    $final[$key] = false;          // something it needs is off → it is off too
+                }
             }
         }
         foreach ($final as $key => $allowed) {

@@ -59,7 +59,7 @@ class PermissionAuditTest extends TestCase
         $res = $this->putJson('/api/permissions/staff', ['permissions' => ['medicines.view' => false]], $this->token($admin))->assertOk();
         $perms = collect($res->json('roles'))->firstWhere('role', 'staff')['permissions'];
         $this->assertFalse(collect($perms)->firstWhere('key', 'medicines.manage')['allowed']);
-        $this->assertSame('medicines.view', collect($perms)->firstWhere('key', 'medicines.manage')['requires']);
+        $this->assertSame(['medicines.view'], collect($perms)->firstWhere('key', 'medicines.manage')['requires']);
         $this->putJson("/api/medicines/{$med->medicine_id}", ['generic_name' => 'Paracetamol', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5], $this->token($staff))->assertForbidden();
         $this->assertNotContains('medicines.manage', $this->getJson('/api/me', $this->token($staff))->json('permissions'));
 
@@ -82,6 +82,25 @@ class PermissionAuditTest extends TestCase
         $granted = $this->getJson('/api/me', $headers)->json('permissions');
         $this->assertEmpty(array_intersect(['requests.create', 'restock.create', 'requests.cancel'], $granted));
         $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $med->medicine_id, 'quantity' => 1]]], $headers)->assertForbidden();
+
+        // Requests are followed in My Requests: with "View and track requests" off, a resident cannot send them
+        // either (they could not see the status, pickup date or upload a prescription).
+        $this->postJson('/api/permissions/resident/reset', [], $this->token($admin))->assertOk();
+        $res = $this->putJson('/api/permissions/resident', ['permissions' => ['requests.view' => false]], $this->token($admin))->assertOk();
+        $perms = collect(collect($res->json('roles'))->firstWhere('role', 'resident')['permissions']);
+        $this->assertSame(['medicines.view', 'requests.view'], $perms->firstWhere('key', 'requests.create')['requires']);
+        $this->assertFalse($perms->firstWhere('key', 'requests.create')['allowed']);
+        $this->assertFalse($perms->firstWhere('key', 'restock.create')['allowed']);
+        $this->assertTrue($perms->firstWhere('key', 'medicines.view')['allowed']);
+        $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $med->medicine_id, 'quantity' => 1]]], $headers)->assertForbidden();
+        // Turning "Submit medicine requests" on again turns on both features it needs.
+        $res = $this->putJson('/api/permissions/resident', ['permissions' => ['medicines.view' => false]], $this->token($admin))->assertOk();
+        $res = $this->putJson('/api/permissions/resident', ['permissions' => ['requests.create' => true]], $this->token($admin))->assertOk();
+        $perms = collect(collect($res->json('roles'))->firstWhere('role', 'resident')['permissions']);
+        $this->assertTrue($perms->firstWhere('key', 'medicines.view')['allowed']);
+        $this->assertTrue($perms->firstWhere('key', 'requests.view')['allowed']);
+        $this->assertTrue($perms->firstWhere('key', 'requests.create')['allowed']);
+        $this->assertFalse($perms->firstWhere('key', 'restock.create')['allowed']); // only what was asked for
 
         // Reset to default gives everything back.
         $this->postJson('/api/permissions/resident/reset', [], $this->token($admin))->assertOk();

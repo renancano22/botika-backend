@@ -30,7 +30,7 @@ class PermissionController extends Controller
                     'description' => $def[2],
                     'default' => (bool) $def[3],
                     'allowed' => $current[$key],
-                    'requires' => $this->permissions->requires($role)[$key] ?? null, // the feature it needs (null = none)
+                    'requires' => $this->permissions->requires($role)[$key] ?? [], // the features it needs (none = [])
                 ])->values(),
                 'updated_at' => $last?->updated_at,
                 'updated_by' => $last?->updater?->name,
