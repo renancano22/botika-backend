@@ -233,7 +233,7 @@ class DashboardController extends Controller
             ];
         })
             ->sortBy([['requests', 'desc'], ['quantity_dispensed', 'desc'], ['restock_requests', 'desc'], ['medicine_name', 'asc']])
-            ->take(5)->values()->all(); // top 5
+            ->take(10)->values()->all(); // top 10 (the dashboard shows 5 per page)
     }
 
     /** Resident dashboard: only the parts the resident may open (User Permissions). */

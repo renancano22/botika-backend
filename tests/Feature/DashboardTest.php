@@ -194,25 +194,25 @@ class DashboardTest extends TestCase
             ->assertJsonPath('analytics.top_medicines.0.available_stock', 40);
     }
 
-    public function test_dashboard_lists_show_5_rows(): void
+    public function test_dashboard_list_sizes(): void
     {
         $admin = User::factory()->admin()->create();
         $staff = User::factory()->create();
         $ana = Resident::create(['name' => 'Ana Cruz', 'address' => 'Gate, Bulan, Sorsogon', 'contact_no' => '09170000001', 'qr_code' => 'BBC-000001']);
-        // 7 medicines requested, each request approved (ready for pickup).
-        foreach (range(1, 7) as $i) {
+        // 12 medicines requested, each request approved (ready for pickup).
+        foreach (range(1, 12) as $i) {
             $m = Medicine::create(['medicine_name' => "Medicine {$i}", 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 1]);
             Inventory::create(['medicine_id' => $m->medicine_id, 'quantity' => 50, 'expiration_date' => now()->addYear()->toDateString()]);
             $r = MedicineRequest::create(['resident_id' => $ana->resident_id, 'request_type' => 'medicine', 'status' => 'approved',
-                'request_date' => now()->subDays($i), 'reviewed_by' => $staff->user_id, 'reviewed_at' => now()->subDays($i)]);
+                'request_date' => now()->subHours($i), 'reviewed_by' => $staff->user_id, 'reviewed_at' => now()->subHours($i)]); // within the claim period
             RequestItem::create(['request_id' => $r->request_id, 'medicine_id' => $m->medicine_id, 'quantity' => $i]);
         }
 
         $res = $this->getJson('/api/dashboard', $this->token($admin))->assertOk()
-            ->assertJsonPath('counts.approved_to_dispense', 7) // the card still counts all of them
+            ->assertJsonPath('counts.approved_to_dispense', 12) // the card still counts all of them
             ->assertJsonCount(5, 'ready_for_pickup')            // the list shows the 5 with the nearest deadline
-            ->assertJsonCount(5, 'analytics.top_medicines');    // top 5 most requested
-        $this->assertSame('Medicine 7', $res->json('ready_for_pickup.0.items.0.medicine.medicine_name')); // approved first, claim deadline first
+            ->assertJsonCount(10, 'analytics.top_medicines');   // top 10 most requested (shown 5 per page)
+        $this->assertSame('Medicine 12', $res->json('ready_for_pickup.0.items.0.medicine.medicine_name')); // approved first, claim deadline first
         $this->getJson('/api/dashboard', $this->token($staff))->assertOk()->assertJsonCount(5, 'ready_for_pickup');
     }
 
