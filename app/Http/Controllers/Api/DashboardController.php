@@ -68,7 +68,6 @@ class DashboardController extends Controller
                 'near_expiry' => $alerts['near_expiry']->count(), // batches with stock left
                 'expired' => $alerts['expired']->count(),
             ];
-            $data['alerts'] = $alerts;
         }
 
         if ($sections['requests']) {
