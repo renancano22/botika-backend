@@ -21,7 +21,16 @@ class PermissionService
         return config("permissions.permissions.{$role}", []);
     }
 
-    /** @return array<string, bool> every permission of the role with its current setting */
+    /** [feature => the feature it needs] for a role (config permissions.requires). */
+    public function requires(string $role): array
+    {
+        return config("permissions.requires.{$role}", []);
+    }
+
+    /**
+     * @return array<string, bool> every permission of the role with its current setting. A feature whose
+     * required feature is off counts as off, so a combination saved earlier can never open a back door.
+     */
     public function forRole(string $role): array
     {
         if (isset($this->cache[$role])) {
@@ -31,6 +40,11 @@ class PermissionService
         $result = [];
         foreach ($this->catalog($role) as $key => $def) {
             $result[$key] = (bool) ($saved[$key] ?? $def[3]);
+        }
+        foreach ($this->requires($role) as $key => $needed) {
+            if (isset($result[$key]) && ! ($result[$needed] ?? false)) {
+                $result[$key] = false;
+            }
         }
         return $this->cache[$role] = $result;
     }
@@ -52,14 +66,33 @@ class PermissionService
         return $this->forRole($user->role)[$permission] ?? false;
     }
 
-    /** Saves the administrator's choices for one role. */
+    /**
+     * Saves the administrator's choices for one role, keeping related features consistent:
+     * turning a feature on also turns on the one it needs; turning a needed feature off also turns off
+     * the features that depend on it.
+     */
     public function update(string $role, array $permissions, User $admin): void
     {
-        foreach ($this->catalog($role) as $key => $def) {
-            if (! array_key_exists($key, $permissions)) continue;
+        $catalog = $this->catalog($role);
+        $final = $this->forRole($role);
+        foreach ($permissions as $key => $allowed) {
+            if (isset($catalog[$key])) $final[$key] = (bool) $allowed;
+        }
+        foreach ($this->requires($role) as $key => $needed) {
+            $neededOff = array_key_exists($needed, $permissions) && ! $permissions[$needed];
+            if (! empty($permissions[$key]) && ! $neededOff) {
+                $final[$needed] = true;            // turned on → what it needs is turned on too
+            }
+            if (! $final[$needed]) {
+                $final[$key] = false;              // what it needs is off → it is off too
+            }
+        }
+        foreach ($final as $key => $allowed) {
+            $saved = RolePermission::where('role', $role)->where('permission', $key)->first();
+            if ($saved ? (bool) $saved->allowed === $allowed : $allowed === (bool) $catalog[$key][3]) continue; // unchanged
             RolePermission::updateOrCreate(
                 ['role' => $role, 'permission' => $key],
-                ['allowed' => (bool) $permissions[$key], 'updated_by' => $admin->user_id],
+                ['allowed' => $allowed, 'updated_by' => $admin->user_id],
             );
         }
         unset($this->cache[$role]);

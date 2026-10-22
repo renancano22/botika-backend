@@ -40,13 +40,31 @@ return [
         ],
     ],
 
+    /*
+     * Features that are used on the page of another feature: [feature => the feature it needs].
+     * A feature is off whenever the one it needs is off (it could not be reached anyway), and turning it on
+     * also turns on the one it needs (Admin → User Permissions shows this).
+     */
+    'requires' => [
+        'staff' => [
+            'medicines.manage' => 'medicines.view',   // added and edited on the Medicine List
+            'inventory.manage' => 'inventory.view',   // stock-in / stock-out are on Stock & Batches
+            'requests.review' => 'requests.view',     // approved / rejected on the Requests page
+        ],
+        'resident' => [
+            'requests.create' => 'medicines.view',    // requests are made on Check Medicines
+            'restock.create' => 'medicines.view',     // restock requests too
+            'requests.cancel' => 'requests.view',     // cancelled from My Requests
+        ],
+    ],
+
     // Shown to the administrator as locked rows: these features are for the administrator only.
     'admin_only' => [
         ['Medicine List', 'Delete medicines'],
         ['Requests', 'Approve and reject restock requests'],
         ['User Accounts', 'Create, edit and deactivate accounts'],
         ['User Permissions', 'Manage user permissions'],
-        ['SMS Notifications', 'Send SMS announcements'],
+        ['SMS Notifications', 'Send SMS announcements and view the SMS log'],
         ['Reports', 'Generate reports'],
         ['Demand Forecasting', 'View and generate forecasts'],
     ],

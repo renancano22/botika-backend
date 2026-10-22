@@ -234,24 +234,36 @@ class DashboardController extends Controller
             ->take(10)->values()->all();
     }
 
+    /** Resident dashboard: only the parts the resident may open (User Permissions). */
     private function resident(User $user): array
     {
         $resident = $user->resident;
         $requests = $resident->requests();
+        $sections = [
+            'requests' => $user->hasPermission('requests.view'),
+            'notifications' => $user->hasPermission('notifications.view'),
+            'medicines' => $user->hasPermission('medicines.view'),
+        ];
+        $data = ['resident' => $resident, 'sections' => $sections, 'counts' => []];
 
-        return [
-            'resident' => $resident,
-            'counts' => [
+        if ($sections['requests']) {
+            $data['counts'] += [
                 'pending' => (clone $requests)->where('status', 'pending')->count(),
                 // ready to claim = approved medicine requests (approved restock requests are still waiting for stock)
                 'approved' => (clone $requests)->where('request_type', 'medicine')->where('status', 'approved')->count(),
                 'dispensed' => (clone $requests)->where('status', 'dispensed')->count(),
-                'available_medicines' => Medicine::withAvailableStock()->get()->filter(fn ($m) => $m->available_stock > 0)->count(),
-            ],
-            'recent_requests' => (clone $requests)->with('items.medicine:medicine_id,medicine_name,unit')
-                ->orderByDesc('request_date')->limit(5)->get(),
-            'recent_notifications' => Notification::where('resident_id', $resident->resident_id)
-                ->orderByDesc('sent_at')->limit(5)->get(),
-        ];
+            ];
+            $data['recent_requests'] = (clone $requests)->with('items.medicine:medicine_id,medicine_name,unit')
+                ->orderByDesc('request_date')->limit(5)->get();
+        }
+        if ($sections['medicines']) {
+            $data['counts']['available_medicines'] = Medicine::withAvailableStock()->get()->filter(fn ($m) => $m->available_stock > 0)->count();
+        }
+        if ($sections['notifications']) {
+            $data['recent_notifications'] = Notification::where('resident_id', $resident->resident_id)
+                ->orderByDesc('sent_at')->limit(5)->get();
+        }
+
+        return $data;
     }
 }

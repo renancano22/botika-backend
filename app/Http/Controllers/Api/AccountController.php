@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Support\PasswordAttempts;
 use App\Support\Rules;
 use Illuminate\Http\Request;
@@ -19,6 +20,12 @@ class AccountController extends Controller
     {
         $user = $request->user();
         $temporary = $user->must_change_password;
+        // A resident changes their own password in Edit Profile, so it follows "Edit profile" (User Permissions).
+        // A temporary password must always be changeable (first log-in).
+        if ($user->role === User::ROLE_RESIDENT && ! $temporary && ! $user->hasPermission('profile.edit')) {
+            $label = app(\App\Services\PermissionService::class)->label(User::ROLE_RESIDENT, 'profile.edit');
+            abort(403, "Access denied. You do not have permission to use \"{$label}\". Please contact the administrator if you need access.");
+        }
 
         $data = $request->validate([
             'current_password' => ['required', 'string'],
