@@ -32,11 +32,13 @@ use Carbon\Carbon;
  * (a medicine never dispensed has nothing to test against). The chosen method drives the restocking recommendation.
  *
  * Request records (D4) are used for the demand the dispensing records cannot show yet, as of now:
- *   - pending medicine requests and approved requests whose medicine is set aside (not yet dispensed);
+ *   - pending medicine requests and approved requests whose medicine is set aside (not yet dispensed): their
+ *     quantities are added to the restock recommendation;
  *   - restock requests still waiting (pending / approved): residents who asked for a medicine that was out of stock.
- * These are added to the restock recommendation, not to the monthly history: once a restock is fulfilled the
- * resident makes a medicine request that is dispensed, so adding past restock requests to the history would
- * count the same need twice.
+ *     Restock requests have no quantity, so they are counted (number of requests) and make the medicine a high
+ *     priority while it has no free stock.
+ * None of these go into the monthly history: once a restock is fulfilled the resident makes a medicine request
+ * that is dispensed, so adding past requests to the history would count the same need twice.
  */
 class ForecastService
 {
@@ -530,7 +532,16 @@ class ForecastService
             ->map(fn ($qty) => (int) $qty);
         $pending = $open('medicine', ['pending']);
         $reserved = $open('medicine', ['approved']); // set aside for residents, to be dispensed from the current stock
-        $restockWaiting = $open('restock', ['pending', 'approved']);
+        // Restock requests have no quantity: the number of waiting restock requests per medicine.
+        $restockWaiting = RequestItem::query()
+            ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
+            ->where('requests.request_type', 'restock')
+            ->whereIn('requests.status', ['pending', 'approved'])
+            ->when($medicineIds !== null, fn ($q) => $q->whereIn('request_items.medicine_id', $medicineIds))
+            ->groupBy('request_items.medicine_id')
+            ->selectRaw('request_items.medicine_id, COUNT(DISTINCT requests.request_id) as total')
+            ->pluck('total', 'medicine_id')
+            ->map(fn ($n) => (int) $n);
 
         $errorSum = array_fill_keys(self::METHODS, null);
         $errorCount = array_fill_keys(self::METHODS, 0);
@@ -614,8 +625,9 @@ class ForecastService
     /**
      * Adds the chosen method's forecast and the restocking recommendation to one medicine:
      *   suggested restock = predicted demand + waiting requests + reorder level − free stock (never below 0)
-     * where waiting requests = pending medicine requests + restock requests still waiting, and
+     * where waiting requests = the quantities in pending medicine requests, and
      * free stock = non-expired stock − stock set aside for approved requests.
+     * Restock requests still waiting (no quantity) make the medicine a high priority while it has no free stock.
      */
     private static function applyMethod(array $row, string $method, array $forecastKeys): array
     {
@@ -623,7 +635,7 @@ class ForecastService
         $chosen = $row['methods'][$method] ?? null;
         $monthly = $chosen['monthly'] ?? array_fill(0, count($forecastKeys), 0);
         $predicted = $chosen === null ? 0 : (int) ceil(round($chosen['predicted_demand'], 2));
-        $waiting = $row['pending_requests'] + $row['restock_requests'];
+        $waiting = $row['pending_requests'];
         $need = $predicted + $waiting;
         // When the stock was never recorded there is nothing to compare with, so no restock is suggested.
         $restock = $row['stock_recorded'] ? max(0, $need + $row['reorder_level'] - $row['free_stock']) : 0;
@@ -633,8 +645,10 @@ class ForecastService
             'predicted_demand' => $predicted,
             'waiting_demand' => $waiting,
             'recommended_restock' => $restock,
-            // high: the free stock would run out within the forecast period; medium: it would fall below the reorder level.
-            'priority' => $restock === 0 ? null : ($need > $row['free_stock'] ? 'high' : 'medium'),
+            // high: the free stock would run out within the forecast period, or residents are waiting for it (restock
+            // requests) and there is none; medium: it would fall below the reorder level.
+            'priority' => $restock === 0 ? null
+                : ($need > $row['free_stock'] || ($row['restock_requests'] > 0 && $row['free_stock'] === 0) ? 'high' : 'medium'),
         ];
     }
 

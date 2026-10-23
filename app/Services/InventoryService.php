@@ -180,7 +180,7 @@ class InventoryService
         ];
     }
 
-    /** Approved restock requests become "fulfilled" once all their medicines are back in stock. */
+    /** Approved restock requests become "fulfilled" once all their medicines are back in stock (restock requests have no quantity). */
     public function fulfillRestockRequests(int $medicineId): void
     {
         /** @var Collection<int, MedicineRequest> $waiting */
@@ -191,7 +191,7 @@ class InventoryService
             ->get();
 
         foreach ($waiting as $req) {
-            $allAvailable = $req->items->every(fn ($item) => $this->freeStock($item->medicine_id) >= $item->quantity);
+            $allAvailable = $req->items->every(fn ($item) => $this->freeStock($item->medicine_id) > 0);
             if (! $allAvailable) continue;
 
             $req->update(['status' => 'fulfilled', 'fulfilled_at' => now()]);

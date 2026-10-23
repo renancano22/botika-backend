@@ -101,7 +101,8 @@ class MedicineRequest extends Model
     public function itemsSummary(int $max = 2): string
     {
         $this->loadMissing('items.medicine');
-        $parts = $this->items->map(fn ($i) => trim(($i->medicine?->medicine_name ?? 'Medicine') . ' x' . $i->quantity));
+        // Restock requests have no quantity: only the medicine names.
+        $parts = $this->items->map(fn ($i) => trim(($i->medicine?->medicine_name ?? 'Medicine') . ($i->quantity === null ? '' : ' x' . $i->quantity)));
         $text = $parts->take($max)->implode(', ');
         $more = $parts->count() - $max;
         return $more > 0 ? "{$text} and {$more} more" : $text;

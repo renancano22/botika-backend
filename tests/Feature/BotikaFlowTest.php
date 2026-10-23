@@ -377,16 +377,27 @@ class BotikaFlowTest extends TestCase
         $headersB = ['Authorization' => 'Bearer ' . $b->json('token')];
         $item = fn (int $qty) => ['items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => $qty]]];
 
-        // Asking for more than the limit gives a clear message.
-        $this->postJson('/api/requests', ['request_type' => 'restock', ...$item(50000)], $headersB)
-            ->assertStatus(422)->assertJsonPath('errors', ['items.0.quantity' => ['You can request at most 30 per medicine.']]);
+        // At most 10 of each medicine in a medicine request, with a clear message.
+        $this->postJson('/api/requests', ['request_type' => 'medicine', ...$item(11)], $headersB)
+            ->assertStatus(422)->assertJsonPath('errors', ['items.0.quantity' => ['You can request at most 10 per medicine.']]);
 
-        // A's approved request sets aside 8; B asks for a restock of 5 (only 2 are free) and the admin approves it.
-        $requestA = $this->postJson('/api/requests', ['request_type' => 'medicine', ...$item(8)], $headersA)->assertCreated()->json('request_id');
+        // While there is free stock, a restock request is refused (a medicine request is used instead).
+        $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $medicine->medicine_id]]], $headersB)
+            ->assertStatus(422)->assertJsonPath('errors', ['items.0.medicine_id' => ['This medicine is available. Please submit a medicine request instead.']]);
+
+        // A's approved request sets aside all 10; B asks for a restock (no quantity) and the admin approves it.
+        $requestA = $this->postJson('/api/requests', ['request_type' => 'medicine', ...$item(10)], $headersA)->assertCreated()->json('request_id');
         $approved = $this->postJson("/api/requests/{$requestA}/approve", [], $this->token($staff))->assertOk();
         $this->assertNotNull($approved->json('claim_by'));
-        $restockB = $this->postJson('/api/requests', ['request_type' => 'restock', ...$item(5)], $headersB)->assertCreated()->json('request_id');
+        $restockB = $this->postJson('/api/requests', ['request_type' => 'restock', 'items' => [['medicine_id' => $medicine->medicine_id]]], $headersB)
+            ->assertCreated()->json('request_id');
+        $this->assertDatabaseHas('request_items', ['request_id' => $restockB, 'medicine_id' => $medicine->medicine_id, 'quantity' => null]);
+        // A quantity sent with a restock request is not saved, and a restock request has no quantity to change.
+        $this->putJson("/api/requests/{$restockB}", $item(5), $headersB)->assertStatus(422)
+            ->assertJsonPath('message', 'A restock request has no quantity to change. You can cancel it instead.');
         $this->postJson("/api/requests/{$restockB}/approve", [], $this->token($admin))->assertOk()->assertJsonPath('status', 'approved');
+        $this->assertDatabaseHas('notifications', ['request_id' => $restockB, 'type' => 'approved']);
+        $this->assertStringNotContainsString(' x', \App\Models\Notification::where('request_id', $restockB)->where('type', 'approved')->value('message'));
 
         // Only the owner can cancel; an approved (not yet claimed) request can be cancelled.
         $this->postJson("/api/requests/{$requestA}/cancel", [], $headersB)->assertForbidden();
@@ -395,7 +406,7 @@ class BotikaFlowTest extends TestCase
             ->assertJsonPath('canceller.name', 'Resident A');
         $this->postJson("/api/requests/{$requestA}/cancel", [], $headersA)->assertStatus(422);
 
-        // The 8 set aside go back to the stock, so B's restock request is now fulfilled.
+        // The 10 set aside go back to the stock, so B's restock request is now fulfilled.
         $this->getJson('/api/medicines', $this->token($staff))->assertJsonPath('0.free_stock', 10);
         $this->assertDatabaseHas('requests', ['request_id' => $restockB, 'status' => 'fulfilled']);
         $this->assertNotNull(\App\Models\MedicineRequest::find($restockB)->fulfilled_at);
@@ -543,7 +554,7 @@ class BotikaFlowTest extends TestCase
         $this->getJson("/api/requests/{$first}", $this->token($staff))->assertOk()->assertJsonPath('status', 'approved');
     }
 
-    public function test_walk_in_limit_of_30_and_no_monthly_limit(): void
+    public function test_walk_in_limit_of_10_and_no_monthly_limit(): void
     {
         $staff = User::factory()->create();
         $a = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
@@ -560,14 +571,14 @@ class BotikaFlowTest extends TestCase
         $walkIn = fn (array $items) => $this->postJson('/api/dispensing/walk-in', ['qr_code' => $qr, 'items' => $items], $this->token($staff));
         $ask = fn (int $medicineId, int $qty) => $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicineId, 'quantity' => $qty]]], $this->token($resident));
 
-        // Walk-in: at most 30 per medicine.
-        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 31]])->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
-        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 30], ['medicine_id' => $b->medicine_id, 'quantity' => 30]])->assertCreated();
-        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 30], ['medicine_id' => $b->medicine_id, 'quantity' => 30]])->assertCreated(); // 120 this month
+        // Walk-in: at most 10 per medicine (the same limit as a medicine request).
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 11]])->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 10], ['medicine_id' => $b->medicine_id, 'quantity' => 10]])->assertCreated();
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 10], ['medicine_id' => $b->medicine_id, 'quantity' => 10]])->assertCreated(); // 40 this month
 
         // No monthly limit: requests and approvals are not limited by what was received this month.
-        $first = $ask($a->medicine_id, 30)->assertCreated()->json('request_id');
-        $second = $ask($b->medicine_id, 30)->assertCreated()->json('request_id');
+        $first = $ask($a->medicine_id, 10)->assertCreated()->json('request_id');
+        $second = $ask($b->medicine_id, 10)->assertCreated()->json('request_id');
         $this->postJson("/api/requests/{$first}/approve", [], $this->token($staff))->assertOk();
         $this->postJson("/api/requests/{$second}/approve", [], $this->token($staff))->assertOk();
         $this->postJson('/api/dispensing', ['request_id' => $first, 'qr_code' => $qr], $this->token($staff))->assertCreated();

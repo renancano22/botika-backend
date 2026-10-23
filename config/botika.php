@@ -15,9 +15,10 @@ return [
     // Password history: a new password cannot be any of the account's last N passwords, counting the
     // current one (5 = the current password and the 4 before it). Applies to every password change and reset.
     'password_history' => (int) env('BOTIKA_PASSWORD_HISTORY', 5),
-    // Most a resident can ask for of one medicine in a single request (medicine or restock request).
+    // Most a resident can ask for of one medicine in a single medicine request (also the limit per medicine for a
+    // walk-in release). Restock requests have no quantity.
     // Keep the same number as MAX_REQUEST_QUANTITY in the frontend (src/validation.ts).
-    'max_request_quantity' => (int) env('BOTIKA_MAX_REQUEST_QUANTITY', 30),
+    'max_request_quantity' => (int) env('BOTIKA_MAX_REQUEST_QUANTITY', 10),
 
     // The 63 barangays of Bulan, Sorsogon (source: PhilAtlas / PSGC). Used for the address dropdown.
     'barangays' => [

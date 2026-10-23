@@ -108,10 +108,11 @@ class ForecastAccuracyTest extends TestCase
         $this->assertSame(104, $p['recommended_restock']);
         $this->assertSame('high', $p['priority']);
 
-        // Out of stock with residents waiting: nothing was dispensed, but the 30 waiting bottles are counted.
+        // Out of stock with residents waiting: nothing was dispensed; the 2 waiting restock requests (no quantity) are
+        // counted and make it a high priority (the cancelled and rejected ones are not counted).
         $m = $rows['Multivitamin Syrup'];
-        $this->assertSame([0, 30, 30, 0], [$m['predicted_demand'], $m['restock_requests'], $m['waiting_demand'], $m['free_stock']]);
-        $this->assertSame(50, $m['recommended_restock']); // 0 + 30 + reorder level 20 − 0
+        $this->assertSame([0, 2, 0, 0], [$m['predicted_demand'], $m['restock_requests'], $m['waiting_demand'], $m['free_stock']]);
+        $this->assertSame(20, $m['recommended_restock']); // 0 + 0 + reorder level 20 − 0
         $this->assertSame('high', $m['priority']);
 
         // A medicine with no records and enough stock needs nothing.

@@ -160,6 +160,8 @@ class RequestController extends Controller
     public function update(Request $request, MedicineRequest $medicineRequest)
     {
         $this->authorizeOwnPending($request, $medicineRequest);
+        // A restock request has no quantity: there is nothing to change (the resident can cancel it instead).
+        abort_if($medicineRequest->request_type === 'restock', 422, 'A restock request has no quantity to change. You can cancel it instead.');
 
         $data = $this->validateItems($request, false);
         $this->checkAvailability($medicineRequest->request_type, $data['items']);
@@ -287,13 +289,20 @@ class RequestController extends Controller
 
     // ---------------------------------------------------------------- helpers
 
+    /**
+     * Medicine requests: each medicine with a quantity of 1 to botika.max_request_quantity (10).
+     * Restock requests: only the medicines (no quantity); a quantity sent with them is not saved.
+     */
     private function validateItems(Request $request, bool $withType): array
     {
+        $restock = $withType && $request->input('request_type') === 'restock';
         $rules = [
             'items' => 'required|array|min:1|max:20',
             'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
-            'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_request_quantity'),
         ];
+        if (! $restock) {
+            $rules['items.*.quantity'] = 'required|integer|min:1|max:' . config('botika.max_request_quantity');
+        }
         if ($withType) {
             $rules['request_type'] = ['required', Rule::in(['medicine', 'restock'])];
         }
@@ -309,7 +318,7 @@ class RequestController extends Controller
         ]);
         $data['items'] = array_map(fn ($i) => [
             'medicine_id' => (int) $i['medicine_id'],
-            'quantity' => (int) $i['quantity'],
+            'quantity' => $restock ? null : (int) $i['quantity'],
         ], $data['items']);
 
         return $data;
@@ -367,7 +376,7 @@ class RequestController extends Controller
 
     /**
      * Medicine requests need free stock (not already reserved for other approved requests);
-     * restock requests are only for medicines that are not available.
+     * restock requests are only for medicines that are out of stock (no free stock left).
      */
     private function checkAvailability(string $type, array $items): void
     {
@@ -379,7 +388,7 @@ class RequestController extends Controller
                     "items.$i.quantity" => "Only {$available} available. You can submit a restock request instead.",
                 ]);
             }
-            if ($type === 'restock' && $available >= $item['quantity']) {
+            if ($type === 'restock' && $available > 0) {
                 throw ValidationException::withMessages([
                     "items.$i.medicine_id" => 'This medicine is available. Please submit a medicine request instead.',
                 ]);

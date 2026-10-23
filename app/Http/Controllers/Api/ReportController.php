@@ -165,7 +165,7 @@ class ReportController extends Controller
             ->orderByDesc('times_requested')
             ->selectRaw('medicines.medicine_name, medicines.category,
                 COUNT(*) as times_requested,
-                SUM(request_items.quantity) as total_quantity,
+                SUM(CASE WHEN requests.request_type = \'medicine\' THEN request_items.quantity ELSE 0 END) as total_quantity,
                 SUM(CASE WHEN requests.request_type = \'restock\' THEN 1 ELSE 0 END) as restock_requests')
             ->limit(20)
             ->get()->toArray();
