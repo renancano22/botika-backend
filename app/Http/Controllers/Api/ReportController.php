@@ -146,6 +146,8 @@ class ReportController extends Controller
             ->map(fn (Dispensing $d) => [
                 'dispensing_id' => $d->dispensing_id,
                 'dispensed_at' => $d->dispensed_at->toDateTimeString(),
+                'request_no' => "No. {$d->request_id}",                                       // the request it was given for
+                'source' => $d->request->remarks === 'Walk-in' ? 'Walk-in' : 'Online request', // same as Dispensing Records
                 'resident_id' => $d->request->resident->qr_code, // Resident ID (BBC-000001)
                 'resident' => $d->request->resident->name,
                 'medicines' => $d->items->map(fn ($i) => "{$i->medicine->medicine_name} x{$i->quantity}")->implode(', '),
@@ -161,9 +163,9 @@ class ReportController extends Controller
             ->whereDate('requests.request_date', '>=', $from)
             ->whereDate('requests.request_date', '<=', $to)
             ->where('requests.status', '!=', 'cancelled')
-            ->groupBy('medicines.medicine_id', 'medicines.medicine_name', 'medicines.category')
+            ->groupBy('medicines.medicine_id', 'medicines.medicine_name', 'medicines.category', 'medicines.unit')
             ->orderByDesc('times_requested')
-            ->selectRaw('medicines.medicine_name, medicines.category,
+            ->selectRaw('medicines.medicine_name, medicines.category, medicines.unit,
                 COUNT(*) as times_requested,
                 SUM(CASE WHEN requests.request_type = \'medicine\' THEN request_items.quantity ELSE 0 END) as total_quantity,
                 SUM(CASE WHEN requests.request_type = \'restock\' THEN 1 ELSE 0 END) as restock_requests')
@@ -205,7 +207,10 @@ class ReportController extends Controller
             ->pluck('restock_requests', 'medicine_id');
 
         return collect($this->inventory->alerts()['low_stock'])
-            ->map(fn ($m) => $m + ['restock_requests' => (int) ($restockDemand[$m['medicine_id']] ?? 0)])
-            ->sortBy('available_stock')->values()->all();
+            ->sortBy('available_stock')->values()
+            // The Medicine ID as shown everywhere else (MED-0005), not the internal number.
+            ->map(fn ($m) => ['medicine_id' => Medicine::codeFor((int) $m['medicine_id'])] + $m
+                + ['restock_requests' => (int) ($restockDemand[$m['medicine_id']] ?? 0)])
+            ->all();
     }
 }

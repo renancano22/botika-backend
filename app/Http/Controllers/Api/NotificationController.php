@@ -33,7 +33,7 @@ class NotificationController extends Controller
         $resident = $user->role === User::ROLE_RESIDENT;
         // The SMS log (every resident's messages and mobile numbers) is for the administrator only.
         abort_if($user->role === User::ROLE_STAFF, 403, 'Access denied. The SMS log is for the administrator only.');
-        $query = Notification::with('resident:resident_id,name,contact_no')
+        $query = Notification::with('resident:resident_id,name,contact_no,qr_code') // Resident ID too (names can repeat)
             ->when($resident, fn ($q) => $q->where('resident_id', $user->resident?->resident_id));
 
         if (Listing::wanted($request)) {

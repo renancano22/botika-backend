@@ -78,6 +78,12 @@ class Medicine extends Model
     /** "MED-0007" */
     public function code(): string
     {
-        return 'MED-' . str_pad((string) $this->medicine_id, 4, '0', STR_PAD_LEFT);
+        return self::codeFor((int) $this->medicine_id);
+    }
+
+    /** Medicine ID shown to users: MED-0005. */
+    public static function codeFor(int $medicineId): string
+    {
+        return 'MED-' . str_pad((string) $medicineId, 4, '0', STR_PAD_LEFT);
     }
 }
