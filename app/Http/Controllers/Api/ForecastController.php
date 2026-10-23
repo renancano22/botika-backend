@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ForecastRun;
 use App\Models\Medicine;
 use App\Services\ForecastService;
 use Illuminate\Http\Request;
@@ -19,15 +20,44 @@ class ForecastController extends Controller
      */
     public function index(Request $request)
     {
-        return $this->forecast->analyze(...$this->options($request));
+        return $this->forecast->analyze(...$this->options($request)) + ['last_generated' => $this->lastGenerated()];
     }
 
-    /** "Generate Forecast": same as index, and the forecasts are saved to the forecast table. */
+    /**
+     * "Generate Forecast": same as index, and the forecasts are saved to the forecast table (D6). Each generation is
+     * recorded (when, by whom, method, history and period) so the page can show "Forecast last generated on …".
+     */
     public function generate(Request $request)
     {
         $data = $this->forecast->analyze(...$this->options($request));
         $this->forecast->save($data['results'], $data['forecast_keys']);
-        return $data + ['saved' => true];
+        ForecastRun::create([
+            'generated_by' => $request->user()->user_id,
+            'method' => $data['method'],
+            'history_months' => $data['history_months'],
+            'horizon' => $data['horizon'],
+            'period_start' => $data['forecast_keys'][0] . '-01',
+            'period_end' => end($data['forecast_keys']) . '-01',
+            'medicines' => count($data['results']),
+            'generated_at' => now(),
+        ]);
+        return $data + ['saved' => true, 'last_generated' => $this->lastGenerated()];
+    }
+
+    /** The most recent "Generate Forecast" (null when a forecast was never generated). */
+    private function lastGenerated(): ?array
+    {
+        $run = ForecastRun::with('generator:user_id,name')->orderByDesc('generated_at')->orderByDesc('forecast_run_id')->first();
+        return $run ? [
+            'generated_at' => $run->generated_at->toDateTimeString(),
+            'generated_by' => $run->generator?->name,
+            'method' => $run->method,
+            'history_months' => $run->history_months,
+            'horizon' => $run->horizon,
+            'period_start' => $run->period_start->format('Y-m'),
+            'period_end' => $run->period_end->format('Y-m'),
+            'medicines' => $run->medicines,
+        ] : null;
     }
 
     /** Seasonal demand: medicines given out most in the rainy and dry seasons, from the dispensing records. */
