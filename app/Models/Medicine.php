@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Support\MedicineCatalog;
+use App\Support\MedicineIdentity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -29,7 +30,21 @@ class Medicine extends Model
             } else {
                 $m->medicine_name = MedicineCatalog::displayName($m->generic_name, $m->strength, $m->dosage_form);
             }
+            // Duplicate detection: unique key of the active ingredient, strength and dosage form.
+            // (Not while an older migration imports the medicine list, before the column exists.)
+            if (! self::hasIdentityColumn()) return;
+            // An older duplicate that has no key keeps none until its details are changed.
+            if ($m->exists && $m->identity_key === null && ! $m->isDirty(['generic_name', 'strength', 'dosage_form', 'medicine_name'])) {
+                return;
+            }
+            $m->identity_key = MedicineIdentity::key($m->generic_name, $m->strength, $m->dosage_form, $m->medicine_name);
         });
+    }
+
+    private static function hasIdentityColumn(): bool
+    {
+        static $has = null;
+        return $has ??= \Illuminate\Support\Facades\Schema::hasColumn('medicines', 'identity_key');
     }
 
     public function inventory(): HasMany

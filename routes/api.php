@@ -85,6 +85,7 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
         Route::delete('/account/photo', [AccountController::class, 'deletePhoto']);
 
         Route::middleware('permission:medicines.manage')->group(function () {
+            Route::get('/medicines/check', [MedicineController::class, 'check']); // duplicate and category check while typing
             Route::post('/medicines', [MedicineController::class, 'store']);
             Route::put('/medicines/{medicine}', [MedicineController::class, 'update']);
             Route::post('/medicines/{medicine}/confirm-no-stock', [MedicineController::class, 'confirmNoStock']);

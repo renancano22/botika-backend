@@ -9,6 +9,9 @@ use App\Models\User;
 use App\Services\InventoryService;
 use App\Support\Listing;
 use App\Support\MedicineCatalog;
+use App\Support\MedicineClassification;
+use App\Support\MedicineIdentity;
+use Illuminate\Database\QueryException;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -104,13 +107,48 @@ class MedicineController extends Controller
 
     public function store(Request $request)
     {
-        return response()->json(Medicine::create($this->validated($request)), 201);
+        $data = $this->validated($request);
+        try {
+            return response()->json(Medicine::create($data), 201);
+        } catch (QueryException $e) {
+            // Saved by someone else at the same moment: the unique identity key refuses the second one.
+            return $this->duplicateResponse($request, $data) ?? throw $e;
+        }
     }
 
     public function update(Request $request, Medicine $medicine)
     {
-        $medicine->update($this->validated($request, $medicine));
+        $data = $this->validated($request, $medicine);
+        try {
+            $medicine->update($data);
+        } catch (QueryException $e) {
+            return $this->duplicateResponse($request, $data, $medicine) ?? throw $e;
+        }
         return $medicine;
+    }
+
+    /**
+     * Checks a medicine while it is being typed in Add / Edit medicine (nothing is saved): is it already
+     * registered, and does the category fit the medicine? ?generic_name= &strength= &dosage_form= &category= &ignore=
+     */
+    public function check(Request $request)
+    {
+        $generic = trim((string) $request->input('generic_name'));
+        if (mb_strlen($generic) < 2) {
+            return ['duplicate' => null, 'duplicate_message' => null, 'categories' => null, 'category_message' => null];
+        }
+        $strength = $request->input('strength') ?: null;
+        $form = $request->input('dosage_form') ?: null;
+        $ignore = $request->integer('ignore') ?: null;
+        $duplicate = MedicineIdentity::findDuplicate($generic, $strength, $form, $ignore);
+        $category = (string) $request->input('category');
+
+        return [
+            'duplicate' => $duplicate ? $this->duplicateInfo($duplicate) : null,
+            'duplicate_message' => $duplicate ? MedicineIdentity::message($duplicate, $request->user()->hasPermission('inventory.manage')) : null,
+            'categories' => MedicineClassification::categoriesFor($generic, $form), // null: not in the reference
+            'category_message' => $category !== '' ? MedicineClassification::mismatch($generic, $form, $category) : null,
+        ];
     }
 
     /**
@@ -168,14 +206,38 @@ class MedicineController extends Controller
             'reorder_level.max' => 'The reorder level can be at most 100,000.',
         ]);
 
-        $name = MedicineCatalog::displayName($data['generic_name'], $data['strength'] ?? null, $data['dosage_form'] ?? null);
-        $duplicate = Medicine::where('medicine_name', $name)
-            ->when($ignore, fn ($q) => $q->where('medicine_id', '!=', $ignore->medicine_id))
-            ->exists();
-        if ($duplicate) {
-            throw ValidationException::withMessages(['generic_name' => "{$name} is already in the medicine list."]);
+        // Duplicate medicine: the same active ingredient, strength and dosage form is already registered.
+        // When editing, only a change to the medicine itself is checked (other details can always be saved).
+        $identityChanged = ! $ignore || MedicineIdentity::key($data['generic_name'], $data['strength'] ?? null, $data['dosage_form'] ?? null)
+            !== MedicineIdentity::key($ignore->generic_name, $ignore->strength, $ignore->dosage_form, $ignore->medicine_name);
+        if ($identityChanged && ($response = $this->duplicateResponse($request, $data, $ignore))) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException($response);
+        }
+
+        // Category: checked against the verified classification; a confirmed mismatch is not saved.
+        if ($wrong = MedicineClassification::mismatch($data['generic_name'], $data['dosage_form'] ?? null, $data['category'])) {
+            throw ValidationException::withMessages(['category' => $wrong]);
         }
 
         return $data;
+    }
+
+    /** 422 with the warning and the existing medicine (for "Record stock-in"), or null when there is no duplicate. */
+    private function duplicateResponse(Request $request, array $data, ?Medicine $ignore = null): ?\Illuminate\Http\JsonResponse
+    {
+        $duplicate = MedicineIdentity::findDuplicate($data['generic_name'], $data['strength'] ?? null, $data['dosage_form'] ?? null, $ignore?->medicine_id);
+        if (! $duplicate) return null;
+        $message = MedicineIdentity::message($duplicate, $request->user()->hasPermission('inventory.manage'));
+        return response()->json([
+            'message' => $message,
+            'errors' => ['generic_name' => [$message]],
+            'duplicate' => $this->duplicateInfo($duplicate),
+        ], 422);
+    }
+
+    private function duplicateInfo(array $duplicate): array
+    {
+        $m = $duplicate['medicine'];
+        return ['medicine_id' => $m->medicine_id, 'medicine_code' => $m->code(), 'medicine_name' => $m->medicine_name, 'exact' => $duplicate['exact']];
     }
 }
