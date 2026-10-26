@@ -7,6 +7,7 @@ use App\Models\Dispensing;
 use App\Models\DispensingItem;
 use App\Models\Medicine;
 use App\Models\MedicineRequest;
+use App\Models\RequestItem;
 use App\Models\Resident;
 use App\Models\User;
 use App\Services\ForecastService;
@@ -74,14 +75,20 @@ class DispensingController extends Controller
     }
 
     /** Dispense an approved medicine request after the resident's QR code / Resident ID is verified. */
+    /**
+     * Dispense an approved medicine request. When the resident asks for more medicine in person while claiming it,
+     * the extra medicines (?items, walk-in) are added to the same request and everything is given in ONE dispensing
+     * record; each medicine is marked as asked for in the request or as walk-in.
+     */
     public function store(Request $request)
     {
         $data = $request->validate([
             'request_id' => 'required|exists:requests,request_id',
             'qr_code' => 'required|string|max:50',
-        ]);
+            ...self::walkInRules(false),
+        ], self::walkInMessages());
 
-        $req = MedicineRequest::with(['items', 'resident'])->findOrFail($data['request_id']);
+        $req = MedicineRequest::with(['items.medicine', 'resident'])->findOrFail($data['request_id']);
 
         if ($req->resident->qr_code !== trim($data['qr_code'])) {
             return response()->json(['message' => 'QR code / Resident ID does not match the requesting resident.'], 422);
@@ -89,12 +96,40 @@ class DispensingController extends Controller
         if ($req->request_type !== 'medicine' || $req->status !== 'approved') {
             return response()->json(['message' => 'Only approved medicine requests can be dispensed.'], 422);
         }
-        $rx = $req->prescriptionMedicines();
+
+        $extra = $data['items'] ?? [];
+        // The limit per medicine counts the request and the medicines added in person together.
+        $max = (int) config('botika.max_request_quantity');
+        foreach ($extra as $i => $item) {
+            $inRequest = (int) $req->items->where('medicine_id', (int) $item['medicine_id'])->sum('quantity');
+            if ($inRequest > 0 && $inRequest + (int) $item['quantity'] > $max) {
+                $name = $req->items->firstWhere('medicine_id', (int) $item['medicine_id'])->medicine->medicine_name;
+                $left = max(0, $max - $inRequest);
+                return response()->json([
+                    'message' => "{$name}: {$inRequest} {$this->already($inRequest)} in Request No. {$req->request_id}. At most {$max} per medicine can be given, so "
+                        . ($left ? "add at most {$left} more." : 'no more can be added.'),
+                    'errors' => ["items.{$i}.quantity" => ["At most {$left} more (already {$inRequest} in the request)."]],
+                ], 422);
+            }
+        }
+
+        $rx = collect($req->prescriptionMedicines())->merge($this->prescriptionNames($extra))->unique()->values();
         if ($rx->isNotEmpty() && ! $request->boolean('prescription_checked')) {
             return response()->json(['message' => self::rxMessage($rx->implode(', '))], 422);
         }
+        if ($error = $this->freeStockError($extra)) {
+            return $error;
+        }
 
-        return response()->json($this->dispense($req, $request->user(), $rx->isNotEmpty()), 201);
+        $dispensing = DB::transaction(function () use ($req, $extra, $request, $rx) {
+            if ($extra) {
+                $req->items()->createMany(self::walkInItems($extra));
+                $req->load('items.medicine');
+            }
+            return $this->dispense($req, $request->user(), $rx->isNotEmpty());
+        });
+
+        return response()->json($dispensing, 201);
     }
 
     /** Walk-in: staff verifies the resident's QR code and dispenses directly (recorded as a request too). */
@@ -102,33 +137,17 @@ class DispensingController extends Controller
     {
         $data = $request->validate([
             'qr_code' => 'required|exists:residents,qr_code',
-            'items' => 'required|array|min:1|max:20',
-            'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
-            'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_request_quantity'),
-        ], [
-            'items.*.quantity.max' => 'At most :max can be given per medicine.',
-            'items.*.medicine_id.distinct' => 'This medicine is already in the list.',
-            'items.*.medicine_id.required' => 'Choose a medicine for each row.',
-            'items.required' => 'Add at least one medicine.',
-            'items.max' => 'At most 20 medicines can be dispensed at once.',
-            'qr_code.exists' => 'No resident found with this Resident ID.',
-        ]);
+            ...self::walkInRules(true),
+        ], [...self::walkInMessages(), 'qr_code.exists' => 'No resident found with this Resident ID.']);
 
         $resident = Resident::where('qr_code', $data['qr_code'])->firstOrFail();
 
-        $rx = Medicine::whereIn('medicine_id', array_column($data['items'], 'medicine_id'))->where('requires_prescription', true)->pluck('medicine_name');
+        $rx = $this->prescriptionNames($data['items']);
         if ($rx->isNotEmpty() && ! $request->boolean('prescription_checked')) {
             return response()->json(['message' => self::rxMessage($rx->implode(', '))], 422);
         }
-
-        // Walk-ins may only take stock that is not already reserved for approved requests.
-        foreach ($data['items'] as $i => $item) {
-            $free = $this->inventory->freeStock((int) $item['medicine_id']);
-            if ($free < (int) $item['quantity']) {
-                return response()->json([
-                    'message' => "Only {$free} can be dispensed for item #" . ($i + 1) . '. The rest is reserved for approved requests.',
-                ], 422);
-            }
+        if ($error = $this->freeStockError($data['items'])) {
+            return $error;
         }
 
         $dispensing = DB::transaction(function () use ($resident, $data, $request, $rx) {
@@ -141,15 +160,67 @@ class DispensingController extends Controller
                 'reviewed_at' => now(),
                 'remarks' => 'Walk-in',
             ]);
-            $req->items()->createMany(array_map(fn ($i) => [
-                'medicine_id' => (int) $i['medicine_id'],
-                'quantity' => (int) $i['quantity'],
-            ], $data['items']));
+            $req->items()->createMany(self::walkInItems($data['items']));
 
             return $this->dispense($req->load(['items', 'resident']), $request->user(), $rx->isNotEmpty());
         });
 
         return response()->json($dispensing, 201);
+    }
+
+    /** Medicines asked for in person (walk-in): required for a walk-in release, optional when claiming a request. */
+    private static function walkInRules(bool $required): array
+    {
+        return [
+            'items' => ($required ? 'required' : 'nullable') . '|array|' . ($required ? 'min:1|' : '') . 'max:20',
+            'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
+            'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_request_quantity'),
+        ];
+    }
+
+    private static function walkInMessages(): array
+    {
+        return [
+            'items.*.quantity.max' => 'At most :max can be given per medicine.',
+            'items.*.medicine_id.distinct' => 'This medicine is already in the list.',
+            'items.*.medicine_id.required' => 'Choose a medicine for each row.',
+            'items.required' => 'Add at least one medicine.',
+            'items.max' => 'At most 20 medicines can be dispensed at once.',
+        ];
+    }
+
+    /** request_items rows for medicines asked for in person. */
+    private static function walkInItems(array $items): array
+    {
+        return array_map(fn ($i) => [
+            'medicine_id' => (int) $i['medicine_id'],
+            'quantity' => (int) $i['quantity'],
+            'source' => RequestItem::WALK_IN,
+        ], $items);
+    }
+
+    private function prescriptionNames(array $items): \Illuminate\Support\Collection
+    {
+        return $items ? Medicine::whereIn('medicine_id', array_column($items, 'medicine_id'))->where('requires_prescription', true)->pluck('medicine_name') : collect();
+    }
+
+    /** Walk-in medicines may only take stock that is not already reserved for approved requests. */
+    private function freeStockError(array $items)
+    {
+        foreach ($items as $i => $item) {
+            $free = $this->inventory->freeStock((int) $item['medicine_id']);
+            if ($free < (int) $item['quantity']) {
+                return response()->json([
+                    'message' => "Only {$free} can be dispensed for item #" . ($i + 1) . '. The rest is reserved for approved requests.',
+                ], 422);
+            }
+        }
+        return null;
+    }
+
+    private function already(int $n): string
+    {
+        return $n === 1 ? 'is already' : 'are already';
     }
 
     private static function rxMessage(string $names): string
@@ -171,7 +242,7 @@ class DispensingController extends Controller
                 $this->inventory->deduct($item->medicine_id, $item->quantity, $staff->user_id, $dispensing->dispensing_id);
             }
 
-            $dispensing->items()->createMany($req->items->map->only(['medicine_id', 'quantity'])->all());
+            $dispensing->items()->createMany($req->items->map->only(['medicine_id', 'quantity', 'source'])->all()); // Request / Walk-in kept per medicine
             $req->update(['status' => 'dispensed']);
 
             return $dispensing;

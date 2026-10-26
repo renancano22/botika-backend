@@ -29,4 +29,13 @@ class Dispensing extends Model
     {
         return $this->hasMany(DispensingItem::class, 'dispensing_id', 'dispensing_id');
     }
+
+    /** Walk-in release, online request, or an online request with medicines also asked for in person (same visit). */
+    public function sourceLabel(): string
+    {
+        if ($this->request?->remarks === 'Walk-in') {
+            return 'Walk-in';
+        }
+        return $this->items->contains('source', DispensingItem::WALK_IN) ? 'Online request + Walk-in' : 'Online request';
+    }
 }

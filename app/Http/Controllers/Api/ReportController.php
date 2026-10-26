@@ -147,10 +147,12 @@ class ReportController extends Controller
                 'dispensing_id' => $d->dispensing_id,
                 'dispensed_at' => $d->dispensed_at->toDateTimeString(),
                 'request_no' => "No. {$d->request_id}",                                       // the request it was given for
-                'source' => $d->request->remarks === 'Walk-in' ? 'Walk-in' : 'Online request', // same as Dispensing Records
+                'source' => $d->sourceLabel(), // same as Dispensing Records
                 'resident_id' => $d->request->resident->qr_code, // Resident ID (BBC-000001)
                 'resident' => $d->request->resident->name,
-                'medicines' => $d->items->map(fn ($i) => "{$i->medicine->medicine_name} x{$i->quantity}")->implode(', '),
+                // In a visit with both, each medicine is marked as asked for in the request or in person (walk-in).
+                'medicines' => $d->items->map(fn ($i) => "{$i->medicine->medicine_name} x{$i->quantity}"
+                    . ($d->sourceLabel() === 'Online request + Walk-in' ? ($i->source === DispensingItem::WALK_IN ? ' (walk-in)' : ' (request)') : ''))->implode(', '),
                 'dispensed_by' => $d->dispenser?->name,
             ])->all();
     }
