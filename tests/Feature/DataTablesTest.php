@@ -226,6 +226,14 @@ class DataTablesTest extends TestCase
         $this->getJson('/api/inventory/transactions?per_page=5&from=2026-10-02&to=2026-10-04', $headers)->assertJsonPath('meta.total', 3);
         $this->getJson('/api/inventory/transactions?per_page=5&search=losartan', $headers)->assertJsonPath('meta.total', 6)
             ->assertJsonPath('data.0.reason_text', 'Damaged');
+
+        // A batch number: "20", "#20", "Batch 20" and "Batch No. 20" find that batch (and its stock-in / stock-out history).
+        $b = $batches[0]->inventory_id;
+        foreach (["{$b}", "#{$b}", "Batch {$b}", "batch no. {$b}", "Batch #{$b}"] as $typed) {
+            $this->getJson('/api/inventory?per_page=5&search=' . urlencode($typed), $headers)->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.inventory_id', $b);
+            $this->getJson('/api/inventory/transactions?per_page=5&search=' . urlencode($typed), $headers)->assertJsonPath('meta.total', 6);
+        }
+        $this->getJson('/api/inventory?per_page=5&search=' . urlencode('Batch 999999'), $headers)->assertJsonPath('meta.total', 0);
     }
 
     public function test_medicine_users_sms_log_and_report_history_tables(): void

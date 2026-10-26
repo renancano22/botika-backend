@@ -57,21 +57,21 @@ class Listing
     }
 
     /**
-     * The typed search, trimmed. "Request No. 41", "No. 41" and "#41" become "41".
+     * The typed search, trimmed. "Request No. 41", "No. 41", "#41" and "Batch 41" become "41".
      */
     public static function search(Request $request): string
     {
         $s = trim((string) $request->input('search', ''));
-        return mb_substr(preg_replace('/^(request\s*)?(no\.?|#)\s*(?=\d)/i', '', $s), 0, 100);
+        return mb_substr(preg_replace('/^(?:(?:request|batch)\s*(?:no\.?|#)?|no\.?|#)\s*(?=\d+$)/i', '', $s), 0, 100);
     }
 
     /**
-     * A number typed as a number ("Request No. 41", "No. 41", "#41"): only that record is searched for,
-     * so it does not also match Resident IDs or names that contain those digits. Null for any other search.
+     * A number typed as a number ("Request No. 41", "No. 41", "#41", "Batch 41", "Batch #41"): only that record is
+     * searched for, so it does not also match Resident IDs or names that contain those digits. Null for any other search.
      */
     public static function number(Request $request): ?int
     {
-        return preg_match('/^\s*(request\s*|batch\s*)?(no\.?|#)\s*(\d{1,9})\s*$/i', (string) $request->input('search', ''), $m) ? (int) $m[3] : null;
+        return preg_match('/^\s*(?:(?:request|batch)\s*(?:no\.?|#)?|no\.?|#)\s*(\d{1,9})\s*$/i', (string) $request->input('search', ''), $m) ? (int) $m[1] : null;
     }
 
     /** "%term%" for LIKE, with % and _ typed by the user matched literally. */
