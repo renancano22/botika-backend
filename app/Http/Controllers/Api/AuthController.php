@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Resident;
 use App\Models\User;
+use App\Support\LoginAttempts;
 use App\Support\Rules;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -77,9 +78,15 @@ class AuthController extends Controller
 
         $user = User::findByLogin($data['login']);
 
+        // Repeated wrong log-in attempts within a short time are temporarily blocked (protects against guessing).
+        LoginAttempts::ensureNotBlocked($request, $data['login'], $user);
+
         if (! $user || ! Hash::check($data['password'], $user->password_hash)) {
-            throw ValidationException::withMessages(['login' => 'Invalid email/mobile number or password.']);
+            $left = LoginAttempts::failed($request, $data['login'], $user); // blocks (429) on the last allowed try
+            throw ValidationException::withMessages(['login' => 'Invalid email/mobile number or password.'
+                . ($left <= 2 ? " {$left} more " . ($left === 1 ? 'attempt' : 'attempts') . ' before logging in is temporarily blocked.' : '')]);
         }
+        LoginAttempts::clear($request, $data['login'], $user);
         if (! $user->is_active) {
             throw ValidationException::withMessages(['login' => 'This account has been deactivated. Please contact the administrator.']);
         }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\SmsService;
+use App\Support\LoginAttempts;
 use App\Support\Rules;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -92,6 +93,7 @@ class PasswordResetController extends Controller
         $user->save();
         DB::table('password_reset_codes')->where('user_id', $user->user_id)->delete();
         $user->tokens()->delete(); // log out every device that used the old password
+        LoginAttempts::clear($request, $data['login'], $user); // a log-in blocked after wrong guesses can use the new password
 
         return response()->json(['message' => 'Your password has been changed. You can now log in.']);
     }
