@@ -833,12 +833,13 @@ class BotikaFlowTest extends TestCase
         $this->postJson("/api/medicines/{$lactulose['medicine_id']}/confirm-no-stock", [], $this->token($staff))->assertOk();
         $this->postJson("/api/medicines/{$old->medicine_id}/confirm-no-stock", [], $this->token($staff))->assertStatus(422);
         $budesonide = Medicine::where('medicine_name', 'Budesonide Nebule')->firstOrFail();
-        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $budesonide->medicine_id, 'quantity' => 50,
+        $this->assertSame(100, $budesonide->reorder_level); // added from the Botika list: reorder level 100 automatically
+        $this->postJson('/api/inventory/stock-in', ['medicine_id' => $budesonide->medicine_id, 'quantity' => 150,
             'expiration_date' => now()->addYear()->toDateString()], $this->token($staff))->assertCreated();
         $list = collect($this->getJson('/api/medicines', $this->token($staff))->json())->keyBy('medicine_name');
         $this->assertSame('out_of_stock', $list['Lactulose Syrup']['status']);
-        $this->assertSame('available', $list['Budesonide Nebule']['status']);
-        $this->assertSame(50, $list['Budesonide Nebule']['batches'][0]['quantity']);
+        $this->assertSame('available', $list['Budesonide Nebule']['status']); // 150 is above the reorder level 100
+        $this->assertSame(150, $list['Budesonide Nebule']['batches'][0]['quantity']);
         $this->assertNotNull($list['Budesonide Nebule']['last_updated']);
         $this->assertGreaterThan(0, $this->getJson('/api/dashboard', $this->token($staff))->json('counts.unrecorded'));
 

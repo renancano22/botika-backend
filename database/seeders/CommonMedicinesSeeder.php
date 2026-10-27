@@ -47,7 +47,7 @@ class CommonMedicinesSeeder extends Seeder
                 'medicine_name' => trim("{$generic} {$strength}"),
                 'category' => $category,
                 'unit' => $unit,
-                'reorder_level' => $reorder,
+                'reorder_level' => config('botika.default_reorder_level'), // automatic reorder level (100)
                 'requires_prescription' => str_contains($description, 'Requires prescription'),
             ]);
             $added++;

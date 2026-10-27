@@ -19,6 +19,9 @@ return [
     // walk-in release). Restock requests have no quantity.
     // Keep the same number as MAX_REQUEST_QUANTITY in the frontend (src/validation.ts).
     'max_request_quantity' => (int) env('BOTIKA_MAX_REQUEST_QUANTITY', 10),
+    // Reorder level given automatically to a new medicine: "Low stock" when the stock is at or below it.
+    // It can still be changed per medicine (Medicine List → Edit). Keep the same number as in the frontend form.
+    'default_reorder_level' => (int) env('BOTIKA_DEFAULT_REORDER_LEVEL', 100),
 
     // The 63 barangays of Bulan, Sorsogon (source: PhilAtlas / PSGC). Used for the address dropdown.
     'barangays' => [

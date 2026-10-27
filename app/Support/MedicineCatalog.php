@@ -247,7 +247,7 @@ class MedicineCatalog
                 'dosage_form' => $item['form'],
                 'category' => $item['category'],
                 'unit' => self::unitFor($item['form']),
-                'reorder_level' => 20,
+                'reorder_level' => config('botika.default_reorder_level'),
                 'requires_prescription' => in_array($item['category'], self::PRESCRIPTION_CATEGORIES, true),
             ]); // stock not recorded: no batch is created
             $claimed[] = $new->medicine_id;
