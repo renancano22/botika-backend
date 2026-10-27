@@ -33,6 +33,9 @@ class MedicineController extends Controller
             ->when($request->search, fn ($q, $s) => $q->where(fn ($w) => $w
                 ->where('medicine_name', 'like', "%{$s}%")->orWhere('generic_name', 'like', "%{$s}%")->orWhere('category', 'like', "%{$s}%")))
             ->when($request->category, fn ($q, $c) => $q->where('category', $c))
+            // ?prescription=required (needs a doctor's prescription) / not_required (no prescription needed)
+            ->when(in_array($request->input('prescription'), ['required', 'not_required'], true),
+                fn ($q) => $q->where('requires_prescription', $request->input('prescription') === 'required'))
             ->orderBy('generic_name')->orderBy('medicine_name')
             ->get();
 
