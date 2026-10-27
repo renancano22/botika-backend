@@ -16,6 +16,10 @@ use Illuminate\Validation\ValidationException;
 class AuthController extends Controller
 {
     /** Residents register with a mobile number; an email address is optional. */
+    public const ALREADY_REGISTERED = 'A resident with this name is already registered in this barangay. If this is you, log in with your old mobile number or email, '
+        . 'or use "Forgot password?". If you changed your number, update it in My Profile after logging in, or ask the Botika ng Bayan staff for help. '
+        . 'If you are a different person with the same name, add your middle name or suffix (e.g. Jr., Sr.).';
+
     public function register(Request $request)
     {
         $request->merge([
@@ -36,6 +40,13 @@ class AuthController extends Controller
             'contact_no.unique' => 'This mobile number is already registered. Please log in instead.',
             'email.unique' => 'This email is already registered. Please log in instead.',
         ]);
+
+        // Already registered? The same name in the same barangay is refused, as in registration by the staff, so one
+        // resident does not get a second account and Resident ID (split history, request limits per account).
+        [$same] = Resident::possibleDuplicates($data['name'], $data['barangay']);
+        if ($same->isNotEmpty()) {
+            throw ValidationException::withMessages(['name' => self::ALREADY_REGISTERED]);
+        }
 
         // Stored as e.g. "Purok 3, Zone I Poblacion, Bulan, Sorsogon".
         $data['address'] = Resident::composeAddress($data['address_line'] ?? null, $data['barangay']);

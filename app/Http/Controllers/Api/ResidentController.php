@@ -48,7 +48,7 @@ class ResidentController extends Controller
         // Already registered? Exactly the same name in the same barangay is refused (no duplicate records).
         // A similar name (same first and last name, e.g. with/without a middle initial) is shown first;
         // the staff may still register a different person after checking.
-        [$same, $similar] = $this->possibleDuplicates($data['name'], $data['barangay']);
+        [$same, $similar] = Resident::possibleDuplicates($data['name'], $data['barangay']);
         if ($same->isNotEmpty()) {
             return response()->json([
                 'message' => 'This resident is already registered. Select them instead. If this is a different person with the same name, add their middle name or suffix (e.g. Jr., Sr.) to tell them apart.',
@@ -75,35 +75,6 @@ class ResidentController extends Controller
         });
 
         return response()->json($this->dispensingRecord($resident->fresh()), 201);
-    }
-
-    /**
-     * Residents in the barangay with the same name (ignoring capital letters, periods and extra spaces),
-     * and with a similar name (same first and last name).
-     * @return array{0: \Illuminate\Support\Collection, 1: \Illuminate\Support\Collection}
-     */
-    private function possibleDuplicates(string $name, string $barangay): array
-    {
-        $norm = fn (string $v) => trim(preg_replace('/\s+/', ' ', str_replace('.', ' ', mb_strtolower($v))));
-        $words = explode(' ', $norm($name));
-        $first = $words[0];
-        $last = end($words);
-
-        $inBarangay = Resident::where('address', 'like', '%' . addcslashes($barangay, '%_\\') . ', Bulan%')
-            ->where('name', 'like', '%' . addcslashes($last, '%_\\') . '%')
-            ->get(['resident_id', 'name', 'qr_code', 'address'])
-            ->filter(fn (Resident $r) => Resident::splitAddress($r->address)['barangay'] === $barangay)
-            ->map(fn (Resident $r) => ['resident_id' => $r->resident_id, 'name' => $r->name, 'qr_code' => $r->qr_code, 'barangay' => $barangay,
-                'norm' => $norm($r->name)]);
-
-        $same = $inBarangay->filter(fn ($r) => $r['norm'] === $norm($name));
-        $similar = $inBarangay->filter(function ($r) use ($first, $last, $norm, $name) {
-            $w = explode(' ', $r['norm']);
-            return $r['norm'] !== $norm($name) && $w[0] === $first && end($w) === $last;
-        });
-        $clean = fn ($c) => $c->map(fn ($r) => collect($r)->except('norm')->all())->values();
-
-        return [$clean($same), $clean($similar)];
     }
 
     /** QR Code / Resident ID verification before dispensing. */

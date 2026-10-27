@@ -76,4 +76,33 @@ class Resident extends Model
     {
         return 'BBC-' . str_pad((string) $residentId, 6, '0', STR_PAD_LEFT);
     }
+
+    /**
+     * Residents in the barangay with the same name (ignoring capital letters, periods and extra spaces),
+     * and with a similar name (same first and last name).
+     * @return array{0: \Illuminate\Support\Collection, 1: \Illuminate\Support\Collection}
+     */
+    public static function possibleDuplicates(string $name, string $barangay): array
+    {
+        $norm = fn (string $v) => trim(preg_replace('/\s+/', ' ', str_replace('.', ' ', mb_strtolower($v))));
+        $words = explode(' ', $norm($name));
+        $first = $words[0];
+        $last = end($words);
+
+        $inBarangay = self::where('address', 'like', '%' . addcslashes($barangay, '%_\\') . ', Bulan%')
+            ->where('name', 'like', '%' . addcslashes($last, '%_\\') . '%')
+            ->get(['resident_id', 'name', 'qr_code', 'address'])
+            ->filter(fn (self $r) => self::splitAddress($r->address)['barangay'] === $barangay)
+            ->map(fn (self $r) => ['resident_id' => $r->resident_id, 'name' => $r->name, 'qr_code' => $r->qr_code, 'barangay' => $barangay,
+                'norm' => $norm($r->name)]);
+
+        $same = $inBarangay->filter(fn ($r) => $r['norm'] === $norm($name));
+        $similar = $inBarangay->filter(function ($r) use ($first, $last, $norm, $name) {
+            $w = explode(' ', $r['norm']);
+            return $r['norm'] !== $norm($name) && $w[0] === $first && end($w) === $last;
+        });
+        $clean = fn ($c) => $c->map(fn ($r) => collect($r)->except('norm')->all())->values();
+
+        return [$clean($same), $clean($similar)];
+    }
 }
