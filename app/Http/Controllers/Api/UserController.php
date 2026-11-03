@@ -33,7 +33,9 @@ class UserController extends Controller
 
     /**
      * User accounts. Data table (?per_page=): one page, with ?role=, ?search= (name, email, mobile number or
-     * Resident ID), ?status=active|inactive and ?sort=name|newest|oldest.
+     * Resident ID), ?status=active|inactive|no_account and ?sort=name|newest|oldest.
+     * Residents registered by the staff at the counter (no cellphone, no online account) are listed too, marked
+     * has_account = false, so every registered resident can be seen here even without a log-in account.
      */
     public function index(Request $request)
     {
@@ -45,14 +47,39 @@ class UserController extends Controller
                 ->orWhereHas('resident', fn ($r) => $r->where('contact_no', 'like', Listing::like($search))->orWhere('qr_code', 'like', Listing::like($search)))));
 
         if (Listing::wanted($request)) {
-            $query->when($request->status === 'active', fn ($q) => $q->where('is_active', true))
-                ->when($request->status === 'inactive', fn ($q) => $q->where('is_active', false));
-            match (Listing::sort($request, ['name', 'newest', 'oldest'])) {
-                'name' => $query->orderBy('name')->orderBy('user_id'),
-                'newest' => $query->orderByDesc('created_at')->orderByDesc('user_id'),
-                'oldest' => $query->orderBy('created_at')->orderBy('user_id'),
+            $status = (string) $request->input('status', '');
+            $sort = Listing::sort($request, ['name', 'newest', 'oldest']);
+            $query->when($status === 'active', fn ($q) => $q->where('is_active', true))
+                ->when($status === 'inactive', fn ($q) => $q->where('is_active', false));
+
+            // Residents without an account: shown with "All roles" / "Residents" and "All statuses" / "No online account".
+            $withCounter = in_array((string) $request->input('role', ''), ['', User::ROLE_RESIDENT], true) && in_array($status, ['', 'no_account'], true);
+            if (! $withCounter) {
+                match ($sort) {
+                    'name' => $query->orderBy('name')->orderBy('user_id'),
+                    'newest' => $query->orderByDesc('created_at')->orderByDesc('user_id'),
+                    'oldest' => $query->orderBy('created_at')->orderBy('user_id'),
+                };
+                return Listing::paginate($query, $request);
+            }
+
+            $accounts = $status === 'no_account' ? collect() : $query->get()->map(fn (User $u) => $u->toArray() + ['has_account' => true]);
+            $counter = Resident::whereNull('user_id')
+                ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w->where('name', 'like', Listing::like($search))
+                    ->orWhere('contact_no', 'like', Listing::like($search))->orWhere('qr_code', 'like', Listing::like($search))))
+                ->get(['resident_id', 'name', 'address', 'contact_no', 'qr_code', 'created_at'])
+                ->map(fn (Resident $r) => [
+                    'user_id' => null, 'name' => $r->name, 'email' => null, 'role' => User::ROLE_RESIDENT, 'is_active' => true,
+                    'has_account' => false, 'created_at' => $r->created_at?->toISOString(), 'resident' => $r->toArray(),
+                ]);
+
+            $all = $accounts->concat($counter);
+            $all = match ($sort) {
+                'name' => $all->sortBy(fn ($r) => [mb_strtolower($r['name']), $r['created_at'] ?? '']),
+                'newest' => $all->sortByDesc(fn ($r) => $r['created_at'] ?? ''),
+                'oldest' => $all->sortBy(fn ($r) => $r['created_at'] ?? ''),
             };
-            return Listing::paginate($query, $request);
+            return Listing::paginateCollection($all->values(), $request);
         }
 
         return $query->orderBy('name')->orderBy('user_id')->get();
