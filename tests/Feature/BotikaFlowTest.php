@@ -256,15 +256,15 @@ class BotikaFlowTest extends TestCase
             ->assertJsonPath('address_line', 'Purok 2')
             ->assertJsonPath('user.resident.qr_code', 'BBC-000001');
 
-        // Edit information (the Resident ID stays the same).
+        // Edit information (the Resident ID stays the same; the registered name and barangay cannot be changed).
         $this->putJson('/api/profile', [
-            'name' => 'Ana Dela Cruz', 'email' => 'Ana@Gmail.com', 'contact_no' => '0919 765 4321',
-            'barangay' => 'Zone II Poblacion', 'address_line' => '',
+            'name' => 'Ana Cruz', 'email' => 'Ana@Gmail.com', 'contact_no' => '0919 765 4321',
+            'barangay' => 'Gate', 'address_line' => '',
         ], $headers)->assertOk()
-            ->assertJsonPath('user.name', 'Ana Dela Cruz')
+            ->assertJsonPath('user.name', 'Ana Cruz')
             ->assertJsonPath('user.email', 'ana@gmail.com')
             ->assertJsonPath('user.resident.contact_no', '09197654321')
-            ->assertJsonPath('user.resident.address', 'Zone II Poblacion, Bulan, Sorsogon')
+            ->assertJsonPath('user.resident.address', 'Gate, Bulan, Sorsogon')
             ->assertJsonPath('user.resident.qr_code', 'BBC-000001');
         $this->putJson('/api/profile', ['name' => 'Ana', 'contact_no' => '09197654321', 'barangay' => 'Manila'], $headers)
             ->assertStatus(422)->assertJsonValidationErrors(['barangay']);
@@ -284,17 +284,17 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/login', ['login' => 'ana@gmail.com', 'password' => 'newpass123'])->assertOk();
 
         // Edit Profile "Save Changes": information, optional password and picture in one request.
-        $info = ['name' => 'Ana Dela Cruz', 'email' => 'ana@gmail.com', 'contact_no' => '09197654321', 'barangay' => 'Zone II Poblacion', 'address_line' => ''];
+        $info = ['name' => 'Ana Cruz', 'email' => 'ana@gmail.com', 'contact_no' => '09197654321', 'barangay' => 'Gate', 'address_line' => ''];
         // Blank password fields: the information is saved and the password is left as it is.
-        $this->putJson('/api/profile', array_merge($info, ['name' => 'Ana  B. Cruz', 'address_line' => ' <b>Purok 5</b> ',
+        $this->putJson('/api/profile', array_merge($info, ['name' => 'ana  cruz', 'address_line' => ' <b>Purok 5</b> ',
             'current_password' => '', 'password' => '', 'password_confirmation' => '']), $headers)->assertOk()
-            ->assertJsonPath('user.name', 'Ana B. Cruz')
+            ->assertJsonPath('user.name', 'Ana Cruz') // kept as registered
             ->assertJsonPath('address_line', 'Purok 5')
             ->assertJsonPath('password_changed', false);
         $this->postJson('/api/login', ['login' => 'ana@gmail.com', 'password' => 'newpass123'])->assertOk();
 
         // Wrong current password, missing current password, mismatch or weak password: nothing is saved.
-        $this->putJson('/api/profile', array_merge($info, ['name' => 'Changed Name', 'current_password' => 'wrong123', 'password' => 'another123', 'password_confirmation' => 'another123']), $headers)
+        $this->putJson('/api/profile', array_merge($info, ['address_line' => 'Purok 9', 'current_password' => 'wrong123', 'password' => 'another123', 'password_confirmation' => 'another123']), $headers)
             ->assertStatus(422)->assertJsonValidationErrors(['current_password']);
         $this->putJson('/api/profile', array_merge($info, ['password' => 'another123', 'password_confirmation' => 'another123']), $headers)
             ->assertStatus(422)->assertJsonValidationErrors(['current_password']);
@@ -304,13 +304,13 @@ class BotikaFlowTest extends TestCase
             ->assertStatus(422)->assertJsonValidationErrors(['password']);
         $this->putJson('/api/profile', array_merge($info, ['current_password' => 'newpass123', 'password' => 'newpass123', 'password_confirmation' => 'newpass123']), $headers)
             ->assertStatus(422)->assertJsonValidationErrors(['password']); // must be a new password
-        $this->getJson('/api/profile', $headers)->assertJsonPath('user.name', 'Ana B. Cruz');
+        $this->getJson('/api/profile', $headers)->assertJsonPath('address_line', 'Purok 5');
 
         // Correct current password: information, new password and new picture are saved together.
         $this->putJson('/api/profile', array_merge($info, ['current_password' => 'newpass123', 'password' => 'another123', 'password_confirmation' => 'another123', 'photo' => $photo]), $headers)
             ->assertOk()
             ->assertJsonPath('password_changed', true)
-            ->assertJsonPath('user.name', 'Ana Dela Cruz')
+            ->assertJsonPath('user.name', 'Ana Cruz')
             ->assertJsonPath('user.resident.photo', $photo);
         $this->postJson('/api/login', ['login' => 'ana@gmail.com', 'password' => 'another123'])->assertOk();
         $this->putJson('/api/profile', array_merge($info, ['remove_photo' => true]), $headers)->assertOk()->assertJsonPath('user.resident.photo', null);
@@ -554,7 +554,7 @@ class BotikaFlowTest extends TestCase
         $this->getJson("/api/requests/{$first}", $this->token($staff))->assertOk()->assertJsonPath('status', 'approved');
     }
 
-    public function test_walk_in_limit_of_10_and_no_monthly_limit(): void
+    public function test_walk_in_limit_of_100_and_no_monthly_limit(): void
     {
         $staff = User::factory()->create();
         $a = Medicine::create(['medicine_name' => 'Paracetamol 500mg', 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
@@ -571,10 +571,15 @@ class BotikaFlowTest extends TestCase
         $walkIn = fn (array $items) => $this->postJson('/api/dispensing/walk-in', ['qr_code' => $qr, 'items' => $items], $this->token($staff));
         $ask = fn (int $medicineId, int $qty) => $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicineId, 'quantity' => $qty]]], $this->token($resident));
 
-        // Walk-in: at most 10 per medicine (the same limit as a medicine request).
-        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 11]])->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
+        // Walk-in: 1 to 100 of each medicine (the staff decide within it), and never more than the stock.
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 101]])->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 0]])->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 25]])->assertCreated(); // more than 10 is allowed
         $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 10], ['medicine_id' => $b->medicine_id, 'quantity' => 10]])->assertCreated();
-        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 10], ['medicine_id' => $b->medicine_id, 'quantity' => 10]])->assertCreated(); // 40 this month
+        $walkIn([['medicine_id' => $a->medicine_id, 'quantity' => 10], ['medicine_id' => $b->medicine_id, 'quantity' => 10]])->assertCreated(); // 65 this month
+
+        // Online medicine requests keep their limit of 10 per medicine.
+        $ask($a->medicine_id, 11)->assertStatus(422);
 
         // No monthly limit: requests and approvals are not limited by what was received this month.
         $first = $ask($a->medicine_id, 10)->assertCreated()->json('request_id');

@@ -51,7 +51,7 @@ class ResidentController extends Controller
         [$same, $similar] = Resident::possibleDuplicates($data['name'], $data['barangay']);
         if ($same->isNotEmpty()) {
             return response()->json([
-                'message' => 'This resident is already registered. Select them instead. If this is a different person with the same name, add their middle name or suffix (e.g. Jr., Sr.) to tell them apart.',
+                'message' => 'This resident is already registered in this barangay. Select them instead. If this is a different person with the same name, add their middle name or suffix (e.g. Jr., Sr.) to tell them apart.',
                 'matches' => $same, 'blocked' => true,
             ], 409);
         }

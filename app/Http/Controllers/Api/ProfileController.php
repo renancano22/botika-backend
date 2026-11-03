@@ -9,6 +9,7 @@ use App\Support\Rules;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Resident "My Profile": view and edit their own information, profile picture and password.
@@ -23,6 +24,9 @@ class ProfileController extends Controller
     {
         return $this->profile($request);
     }
+
+    public const NAME_LOCKED = 'Your registered name cannot be changed. If it is wrong, ask the Botika ng Bayan administrator to correct it.';
+    public const BARANGAY_LOCKED = 'Your registered barangay cannot be changed. If it is wrong, ask the Botika ng Bayan administrator for help.';
 
     /**
      * Edit Profile "Save Changes" (sent only after the resident confirms). In one request:
@@ -70,6 +74,22 @@ class ProfileController extends Controller
             'password.confirmed' => 'The new password and its confirmation do not match.',
             'password.different' => 'The new password must be different from your current password.',
         ]);
+
+        // The registered name and barangay identify the resident (no duplicate records), so the resident cannot change
+        // them. A wrong name is corrected by the administrator (User Accounts → Edit).
+        $barangay = Resident::splitAddress($resident->address)['barangay'];
+        $locked = [];
+        if (Resident::normalName($data['name']) !== Resident::normalName($resident->name)) {
+            $locked['name'] = self::NAME_LOCKED;
+        }
+        if ($barangay && $data['barangay'] !== $barangay) {
+            $locked['barangay'] = self::BARANGAY_LOCKED;
+        }
+        if ($locked) {
+            throw ValidationException::withMessages($locked);
+        }
+        $data['name'] = $resident->name;          // kept exactly as registered
+        $data['barangay'] = $barangay ?: $data['barangay'];
 
         if ($changePassword) {
             PasswordAttempts::verify($user, $data['current_password'], 'current_password', 'Your current password is incorrect. Your changes were not saved.');

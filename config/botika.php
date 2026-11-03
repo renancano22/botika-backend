@@ -15,10 +15,12 @@ return [
     // Password history: a new password cannot be any of the account's last N passwords, counting the
     // current one (5 = the current password and the 4 before it). Applies to every password change and reset.
     'password_history' => (int) env('BOTIKA_PASSWORD_HISTORY', 5),
-    // Most a resident can ask for of one medicine in a single medicine request (also the limit per medicine for a
-    // walk-in release). Restock requests have no quantity.
+    // Most a resident can ask for of one medicine in a single (online) medicine request. Restock requests have no quantity.
     // Keep the same number as MAX_REQUEST_QUANTITY in the frontend (src/validation.ts).
     'max_request_quantity' => (int) env('BOTIKA_MAX_REQUEST_QUANTITY', 10),
+    // Walk-in releases: 1 to this many of each medicine (the staff or administrator decides within it, up to the free
+    // stock). Keep the same number as MAX_WALK_IN_QUANTITY in the frontend (src/validation.ts).
+    'max_walk_in_quantity' => (int) env('BOTIKA_MAX_WALK_IN_QUANTITY', 100),
     // Reorder level given automatically to a new medicine: "Low stock" when the stock is at or below it.
     // It can still be changed per medicine (Medicine List → Edit). Keep the same number as in the frontend form.
     'default_reorder_level' => (int) env('BOTIKA_DEFAULT_REORDER_LEVEL', 100),

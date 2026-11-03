@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Mail\TemporaryPasswordMail;
+use App\Models\Resident;
 use App\Models\User;
 use App\Services\SmsService;
 use App\Support\Rules;
@@ -101,6 +102,13 @@ class UserController extends Controller
         // Prevents the administrator from locking themselves out of the admin pages.
         if ((int) $user->user_id === (int) $request->user()->user_id && $data['role'] !== $user->role) {
             return response()->json(['message' => 'You cannot change the role of your own account.'], 422);
+        }
+
+        // Correcting a resident's name: it must not be another resident's name in the same barangay (no duplicates).
+        $resident = $user->resident;
+        if ($resident && Resident::normalName($data['name']) !== Resident::normalName($resident->name)
+            && Resident::possibleDuplicates($data['name'], (string) Resident::splitAddress($resident->address)['barangay'], $resident->resident_id)[0]->isNotEmpty()) {
+            return response()->json(['message' => Resident::NAME_TAKEN, 'errors' => ['name' => [Resident::NAME_TAKEN]]], 422);
         }
 
         $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null, 'role' => $data['role']]);

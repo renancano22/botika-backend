@@ -53,15 +53,14 @@ class DispensingVisitTest extends TestCase
         RequestItem::create(['request_id' => $req->request_id, 'medicine_id' => $salbu->medicine_id, 'quantity' => 9]);
         $h = $this->headers($staff);
 
-        // The limit per medicine counts the request and the medicine added in person together (9 + 2 > 10).
+        // Walk-in medicines: up to 100 each, and never more than the free stock (42 Salbutamol when 41 are free: refused).
         $this->postJson('/api/dispensing', ['request_id' => $req->request_id, 'qr_code' => 'BBC-000005',
-            'items' => [['medicine_id' => $salbu->medicine_id, 'quantity' => 2]]], $h)
-            ->assertStatus(422)->assertJsonValidationErrors('items.0.quantity');
+            'items' => [['medicine_id' => $salbu->medicine_id, 'quantity' => 42]]], $h)->assertStatus(422);
         $this->assertSame(0, Dispensing::count());
 
         // Methyldopa asked for at the counter + 1 more Salbutamol: given with the request, in ONE record.
         $this->postJson('/api/dispensing', ['request_id' => $req->request_id, 'qr_code' => 'BBC-000005', 'items' => [
-            ['medicine_id' => $methyl->medicine_id, 'quantity' => 10], ['medicine_id' => $salbu->medicine_id, 'quantity' => 1],
+            ['medicine_id' => $methyl->medicine_id, 'quantity' => 25], ['medicine_id' => $salbu->medicine_id, 'quantity' => 1], // up to 100 each: staff decide
         ]], $h)->assertCreated();
 
         $this->assertSame(1, Dispensing::count());
@@ -70,7 +69,7 @@ class DispensingVisitTest extends TestCase
         $this->assertSame($req->request_id, $d->request_id);
         $this->assertSame([
             [$ibu->medicine_id, 1, 'request'], [$salbu->medicine_id, 9, 'request'],
-            [$methyl->medicine_id, 10, 'walk_in'], [$salbu->medicine_id, 1, 'walk_in'],
+            [$methyl->medicine_id, 25, 'walk_in'], [$salbu->medicine_id, 1, 'walk_in'],
         ], $d->items->sortBy('dispensing_item_id')->map(fn ($i) => [$i->medicine_id, $i->quantity, $i->source])->values()->all());
         $this->assertSame('dispensed', $req->fresh()->status);
         $this->assertSame('Online request + Walk-in', $d->sourceLabel());
@@ -79,14 +78,14 @@ class DispensingVisitTest extends TestCase
 
         // Stock: every medicine given is deducted once.
         $this->assertSame(40, (int) Inventory::where('medicine_id', $salbu->medicine_id)->sum('quantity'));
-        $this->assertSame(40, (int) Inventory::where('medicine_id', $methyl->medicine_id)->sum('quantity'));
+        $this->assertSame(25, (int) Inventory::where('medicine_id', $methyl->medicine_id)->sum('quantity'));
 
         // Dispensing Records and the report show one row, with Request / Walk-in per medicine.
         $this->getJson('/api/dispensing?per_page=5', $h)->assertJsonPath('meta.total', 1)
-            ->assertJsonPath('data.0.items.2.source', 'walk_in')->assertJsonPath('summary.total_quantity', 21);
+            ->assertJsonPath('data.0.items.2.source', 'walk_in')->assertJsonPath('summary.total_quantity', 36);
         $row = $this->getJson('/api/reports/dispensing', $this->headers($admin))->assertOk()->json('rows.0');
         $this->assertSame('Online request + Walk-in', $row['source']);
-        $this->assertStringContainsString('Methyldopa 250mg x10 (walk-in)', $row['medicines']);
+        $this->assertStringContainsString('Methyldopa 250mg x25 (walk-in)', $row['medicines']);
         $this->assertStringContainsString('Ibuprofen 200mg Tablet x1 (request)', $row['medicines']);
     }
 
@@ -99,7 +98,8 @@ class DispensingVisitTest extends TestCase
         $h = $this->headers($staff);
 
         // Walk-in only: its own request (remark Walk-in), every medicine walk-in.
-        $this->postJson('/api/dispensing/walk-in', ['qr_code' => 'BBC-000001', 'items' => [['medicine_id' => $para->medicine_id, 'quantity' => 3]]], $h)->assertCreated();
+        $this->postJson('/api/dispensing/walk-in', ['qr_code' => 'BBC-000001', 'items' => [['medicine_id' => $para->medicine_id, 'quantity' => 31]]], $h)->assertStatus(422); // only 30 in stock
+        $this->postJson('/api/dispensing/walk-in', ['qr_code' => 'BBC-000001', 'items' => [['medicine_id' => $para->medicine_id, 'quantity' => 15]]], $h)->assertCreated(); // more than 10 is allowed
         $walk = Dispensing::with('items', 'request')->latest('dispensing_id')->first();
         $this->assertSame(['Walk-in', 'walk_in'], [$walk->sourceLabel(), $walk->items[0]->source]);
 

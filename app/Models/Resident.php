@@ -77,32 +77,44 @@ class Resident extends Model
         return 'BBC-' . str_pad((string) $residentId, 6, '0', STR_PAD_LEFT);
     }
 
+    /** Name as compared for duplicates: capital letters, periods and extra spaces ignored ("Juan  Dela Cruz." = "juan dela cruz"). */
+    public static function normalName(string $name): string
+    {
+        return trim(preg_replace('/\s+/u', ' ', str_replace('.', ' ', mb_strtolower($name))));
+    }
+
     /**
-     * Residents in the barangay with the same name (ignoring capital letters, periods and extra spaces),
-     * and with a similar name (same first and last name).
+     * Residents already registered in the barangay with the same name, and with a similar name (same first and last
+     * name, e.g. with or without a middle initial). The same name in the same barangay is the same person (one record,
+     * one Resident ID); the same name in another barangay is a different person and is allowed.
      * @return array{0: \Illuminate\Support\Collection, 1: \Illuminate\Support\Collection}
      */
-    public static function possibleDuplicates(string $name, string $barangay): array
+    public static function possibleDuplicates(string $name, string $barangay, ?int $ignoreId = null): array
     {
-        $norm = fn (string $v) => trim(preg_replace('/\s+/', ' ', str_replace('.', ' ', mb_strtolower($v))));
-        $words = explode(' ', $norm($name));
+        $target = self::normalName($name);
+        $words = explode(' ', $target);
         $first = $words[0];
         $last = end($words);
 
-        $inBarangay = self::where('address', 'like', '%' . addcslashes($barangay, '%_\\') . ', Bulan%')
+        $found = self::where('address', 'like', '%' . addcslashes($barangay, '%_\\') . ', Bulan%')
             ->where('name', 'like', '%' . addcslashes($last, '%_\\') . '%')
+            ->when($ignoreId, fn ($q) => $q->where('resident_id', '!=', $ignoreId))
+            ->orderBy('resident_id')
             ->get(['resident_id', 'name', 'qr_code', 'address'])
             ->filter(fn (self $r) => self::splitAddress($r->address)['barangay'] === $barangay)
-            ->map(fn (self $r) => ['resident_id' => $r->resident_id, 'name' => $r->name, 'qr_code' => $r->qr_code, 'barangay' => $barangay,
-                'norm' => $norm($r->name)]);
+            ->map(fn (self $r) => ['resident_id' => $r->resident_id, 'name' => $r->name, 'qr_code' => $r->qr_code,
+                'barangay' => self::splitAddress($r->address)['barangay'], 'norm' => self::normalName($r->name)]);
 
-        $same = $inBarangay->filter(fn ($r) => $r['norm'] === $norm($name));
-        $similar = $inBarangay->filter(function ($r) use ($first, $last, $norm, $name) {
+        $same = $found->filter(fn ($r) => $r['norm'] === $target);
+        $similar = $found->filter(function ($r) use ($first, $last, $target) {
             $w = explode(' ', $r['norm']);
-            return $r['norm'] !== $norm($name) && $w[0] === $first && end($w) === $last;
+            return $r['norm'] !== $target && $w[0] === $first && end($w) === $last;
         });
         $clean = fn ($c) => $c->map(fn ($r) => collect($r)->except('norm')->all())->values();
 
         return [$clean($same), $clean($similar)];
     }
+
+    /** The message when a name is already registered to another resident of the same barangay (account edits). */
+    public const NAME_TAKEN = 'Another resident in this barangay is already registered with this name. If this is a different person, add the middle name or suffix (e.g. Jr., Sr.) to tell them apart.';
 }

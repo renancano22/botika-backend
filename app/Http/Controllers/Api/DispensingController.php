@@ -98,21 +98,7 @@ class DispensingController extends Controller
         }
 
         $extra = $data['items'] ?? [];
-        // The limit per medicine counts the request and the medicines added in person together.
-        $max = (int) config('botika.max_request_quantity');
-        foreach ($extra as $i => $item) {
-            $inRequest = (int) $req->items->where('medicine_id', (int) $item['medicine_id'])->sum('quantity');
-            if ($inRequest > 0 && $inRequest + (int) $item['quantity'] > $max) {
-                $name = $req->items->firstWhere('medicine_id', (int) $item['medicine_id'])->medicine->medicine_name;
-                $left = max(0, $max - $inRequest);
-                return response()->json([
-                    'message' => "{$name}: {$inRequest} {$this->already($inRequest)} in Request No. {$req->request_id}. At most {$max} per medicine can be given, so "
-                        . ($left ? "add at most {$left} more." : 'no more can be added.'),
-                    'errors' => ["items.{$i}.quantity" => ["At most {$left} more (already {$inRequest} in the request)."]],
-                ], 422);
-            }
-        }
-
+        // Walk-in medicines: 1 to 100 of each (the staff or administrator decides), up to the free stock.
         $rx = collect($req->prescriptionMedicines())->merge($this->prescriptionNames($extra))->unique()->values();
         if ($rx->isNotEmpty() && ! $request->boolean('prescription_checked')) {
             return response()->json(['message' => self::rxMessage($rx->implode(', '))], 422);
@@ -168,13 +154,16 @@ class DispensingController extends Controller
         return response()->json($dispensing, 201);
     }
 
-    /** Medicines asked for in person (walk-in): required for a walk-in release, optional when claiming a request. */
+    /**
+     * Medicines asked for in person (walk-in): required for a walk-in release, optional when claiming a request.
+     * 1 to botika.max_walk_in_quantity (100) of each medicine, as the staff or administrator decides, up to the free stock.
+     */
     private static function walkInRules(bool $required): array
     {
         return [
             'items' => ($required ? 'required' : 'nullable') . '|array|' . ($required ? 'min:1|' : '') . 'max:20',
             'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
-            'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_request_quantity'),
+            'items.*.quantity' => 'required|integer|min:1|max:' . config('botika.max_walk_in_quantity'),
         ];
     }
 
@@ -216,11 +205,6 @@ class DispensingController extends Controller
             }
         }
         return null;
-    }
-
-    private function already(int $n): string
-    {
-        return $n === 1 ? 'is already' : 'are already';
     }
 
     private static function rxMessage(string $names): string
