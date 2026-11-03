@@ -156,7 +156,8 @@ class ResidentController extends Controller
                 ->where('status', 'approved')
                 ->orderBy('request_date')
                 ->get(),
-            'dispensing_history' => Dispensing::with(['items.medicine', 'dispenser:user_id,name'])
+            // With the request it was for (Request No., walk-in or online request).
+            'dispensing_history' => Dispensing::with(['items.medicine', 'dispenser:user_id,name', 'request:request_id,remarks'])
                 ->whereHas('request', fn ($q) => $q->where('resident_id', $resident->resident_id))
                 ->orderByDesc('dispensed_at')
                 ->limit(20)

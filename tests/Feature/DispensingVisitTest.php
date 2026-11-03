@@ -113,5 +113,10 @@ class DispensingVisitTest extends TestCase
         $this->postJson('/api/dispensing', ['request_id' => $req->request_id, 'qr_code' => 'BBC-000001'], $h)->assertCreated();
         $plain = Dispensing::with('items', 'request')->latest('dispensing_id')->first();
         $this->assertSame(['Online request', 'request'], [$plain->sourceLabel(), $plain->items[0]->source]);
+
+        // Dispense Medicine → dispensing history of the resident: the request (number, walk-in or online) of each release.
+        $history = collect($this->getJson('/api/residents/lookup?code=BBC-000001', $h)->assertOk()->json('dispensing_history'));
+        $this->assertEqualsCanonicalizing([[$req->request_id, null], [$walk->request_id, 'Walk-in']],
+            $history->map(fn ($d) => [$d['request']['request_id'], $d['request']['remarks']])->all());
     }
 }
