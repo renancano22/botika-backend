@@ -135,6 +135,7 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
         Route::put('/users/{user}', [UserController::class, 'update']);
         Route::post('/users/{user}/toggle-active', [UserController::class, 'toggleActive']);
         Route::post('/users/{user}/reset-password', [UserController::class, 'resetPassword']);
+        Route::post('/residents/{resident}/account', [UserController::class, 'createResidentAccount']); // registered at the counter → online account
 
         Route::post('/notifications/announce', [NotificationController::class, 'announce']);
 

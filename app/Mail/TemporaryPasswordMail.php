@@ -12,7 +12,7 @@ use Illuminate\Mail\Mailables\Envelope;
  */
 class TemporaryPasswordMail extends Mailable
 {
-    public function __construct(public string $name, public string $password, public string $expires) {}
+    public function __construct(public string $name, public string $password, public string $expires, public bool $newAccount = false) {}
 
     public function envelope(): Envelope
     {
@@ -22,11 +22,13 @@ class TemporaryPasswordMail extends Mailable
     public function content(): Content
     {
         $e = fn (string $v) => e($v);
+        $intro = $this->newAccount
+            ? 'An online BulanBotikaCare account was created for you by the administrator of Botika ng Bayan Bulan, for the resident record you already have.'
+            : 'Your BulanBotikaCare password was reset by the administrator of Botika ng Bayan Bulan.';
         return new Content(htmlString: <<<HTML
             <div style="font-family:Arial,sans-serif;font-size:15px;color:#1f2d25;line-height:1.5">
               <p>Hello {$e($this->name)},</p>
-              <p>Your BulanBotikaCare password was reset by the administrator of Botika ng Bayan Bulan.
-                 Use this temporary password to log in:</p>
+              <p>{$e($intro)} Use this temporary password to log in:</p>
               <p style="font-size:20px;font-weight:bold;letter-spacing:1px;font-family:Consolas,monospace">{$e($this->password)}</p>
               <p>You will be asked to choose your own new password right after you log in.
                  This temporary password stops working on {$e($this->expires)} if it is not used.</p>

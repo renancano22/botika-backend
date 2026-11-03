@@ -182,46 +182,17 @@ class UserController extends Controller
      */
     private function sendResidentPassword(User $user, string $temporary)
     {
-        $sms = app(SmsService::class);
-        $mobile = $user->resident?->contact_no;
-        $email = $user->email;
-        $mailReady = config('mail.default') !== 'log'; // the "log" mailer would write the password to the log file
-
-        if (! $mobile && ! $email) {
-            return response()->json(['message' => 'This resident has no mobile number or email address, so a new password cannot be sent to them.'], 422);
-        }
-        if (! ($mobile && $sms->ready()) && ! ($email && $mailReady)) {
-            return response()->json(['message' => 'The new password cannot be sent because SMS and email are not set up on the server yet. '
-                . 'The resident\'s current password was not changed.'], 422);
+        if ($error = $this->cannotSend($user->resident?->contact_no, $user->email)) {
+            return $error;
         }
 
         DB::beginTransaction();
         try {
-            $user->setTemporaryPassword($temporary);
-            $user->save();
-            $expires = $user->temp_password_expires_at->format('M j, Y g:i A');
-            $sent = ['sms' => null, 'email' => null];
-
-            if ($mobile && $sms->ready()) {
-                $text = "BulanBotikaCare: Your password was reset by the administrator. Temporary password: {$temporary} "
-                    . "Log in and change it right away. It expires on {$expires}. Do not share it with anyone.";
-                if ($sms->sendTo($mobile, $text, secret: true) === 'sent') {
-                    $sent['sms'] = $mobile;
-                }
-            }
-            if ($email && $mailReady) {
-                try {
-                    Mail::to($email)->send(new TemporaryPasswordMail($user->name, $temporary, $expires));
-                    $sent['email'] = $email;
-                } catch (Throwable $e) {
-                    Log::warning('Temporary password email failed: ' . get_class($e)); // never the message (it has the password)
-                }
-            }
+            $sent = $this->deliverTemporaryPassword($user, $temporary, newAccount: false);
         } catch (Throwable $e) {
             DB::rollBack();
             throw $e;
         }
-
         if (! $sent['sms'] && ! $sent['email']) {
             DB::rollBack(); // the resident keeps the current password
             return response()->json(['message' => 'The new password could not be sent to the resident by SMS or email. '
@@ -232,6 +203,105 @@ class UserController extends Controller
         $user->tokens()->delete(); // logged out on every device
 
         return response()->json(['user' => $user->fresh('resident'), 'sent_to' => $sent]);
+    }
+
+    /**
+     * Online account for a resident registered at the counter (e.g. no cellphone then): the same resident record,
+     * Resident ID and history, now with a log-in. A temporary password is sent only to the resident (SMS / email),
+     * never shown to the administrator; they choose their own password at the first log-in.
+     * If it cannot be sent, nothing is created.
+     */
+    public function createResidentAccount(Request $request, Resident $resident)
+    {
+        if ($resident->user_id) {
+            return response()->json(['message' => 'This resident already has an online account.'], 422);
+        }
+        $request->merge([
+            'contact_no' => Resident::normalizePhone($request->input('contact_no')),
+            'email' => $request->filled('email') ? strtolower(trim((string) $request->input('email'))) : null,
+        ]);
+        $data = $request->validate([
+            'contact_no' => ['required', 'string', 'regex:/^09\d{9}$/', Rule::unique('residents', 'contact_no')->ignore($resident->resident_id, 'resident_id')],
+            'email' => [...Rules::gmail(false), 'unique:users,email'],
+        ], Rules::messages() + [
+            'contact_no.required' => 'Enter the resident\'s mobile number. It is used to log in and to send the temporary password.',
+            'contact_no.regex' => 'Enter a valid mobile number, e.g. 09171234567.',
+            'contact_no.unique' => 'This mobile number is already used by another resident.',
+            'email.unique' => 'This email is already used by another account.',
+        ]);
+
+        if ($error = $this->cannotSend($data['contact_no'], $data['email'] ?? null)) {
+            return $error;
+        }
+
+        DB::beginTransaction();
+        try {
+            $user = User::create(['name' => $resident->name, 'email' => $data['email'] ?? null,
+                'password_hash' => bin2hex(random_bytes(16)), 'role' => User::ROLE_RESIDENT]); // replaced by the temporary password below
+            $resident->update(['user_id' => $user->user_id, 'contact_no' => $data['contact_no']]);
+            $user->setRelation('resident', $resident);
+            $temporary = TemporaryPassword::generate([$resident->name, $user->email, $resident->contact_no], $user);
+            $sent = $this->deliverTemporaryPassword($user, $temporary, newAccount: true);
+        } catch (Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+        if (! $sent['sms'] && ! $sent['email']) {
+            DB::rollBack(); // no account is created
+            return response()->json(['message' => 'The temporary password could not be sent to the resident by SMS or email, '
+                . 'so the account was not created. Please try again later.'], 422);
+        }
+        DB::commit();
+
+        return response()->json(['user' => $user->fresh('resident'), 'sent_to' => $sent], 201);
+    }
+
+    /** Why a temporary password cannot be sent to a resident, or null when it can (SMS or email is set up). */
+    private function cannotSend(?string $mobile, ?string $email)
+    {
+        if (! $mobile && ! $email) {
+            return response()->json(['message' => 'This resident has no mobile number or email address, so a new password cannot be sent to them.'], 422);
+        }
+        $mailReady = config('mail.default') !== 'log'; // the "log" mailer would write the password to the log file
+        if (! ($mobile && app(SmsService::class)->ready()) && ! ($email && $mailReady)) {
+            return response()->json(['message' => 'The password cannot be sent because SMS and email are not set up on the server yet. '
+                . 'Nothing was changed.'], 422);
+        }
+        return null;
+    }
+
+    /** Sets the temporary password and sends it to the resident; returns where it was sent. Call inside a transaction. */
+    private function deliverTemporaryPassword(User $user, string $temporary, bool $newAccount): array
+    {
+        $sms = app(SmsService::class);
+        $mobile = $user->resident?->contact_no;
+        $email = $user->email;
+        $mailReady = config('mail.default') !== 'log';
+
+        $user->setTemporaryPassword($temporary);
+        $user->save();
+        $expires = $user->temp_password_expires_at->format('M j, Y g:i A');
+        $sent = ['sms' => null, 'email' => null];
+
+        if ($mobile && $sms->ready()) {
+            $text = $newAccount
+                ? "BulanBotikaCare: An online account was created for you (Resident ID {$user->resident->qr_code}). Log in with your mobile number {$mobile} "
+                    . "and this temporary password: {$temporary} Change it right away. It expires on {$expires}. Do not share it with anyone."
+                : "BulanBotikaCare: Your password was reset by the administrator. Temporary password: {$temporary} "
+                    . "Log in and change it right away. It expires on {$expires}. Do not share it with anyone.";
+            if ($sms->sendTo($mobile, $text, secret: true) === 'sent') {
+                $sent['sms'] = $mobile;
+            }
+        }
+        if ($email && $mailReady) {
+            try {
+                Mail::to($email)->send(new TemporaryPasswordMail($user->name, $temporary, $expires, $newAccount));
+                $sent['email'] = $email;
+            } catch (Throwable $e) {
+                Log::warning('Temporary password email failed: ' . get_class($e)); // never the message (it has the password)
+            }
+        }
+        return $sent;
     }
 
     public function toggleActive(Request $request, User $user)

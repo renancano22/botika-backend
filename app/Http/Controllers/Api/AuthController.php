@@ -17,7 +17,7 @@ class AuthController extends Controller
 {
     /** Residents register with a mobile number; an email address is optional. */
     public const ALREADY_REGISTERED = 'A resident with this name is already registered in this barangay. If this is you, log in with your old mobile number or email, '
-        . 'or use "Forgot password?". If you changed your number, update it in My Profile after logging in, or ask the Botika ng Bayan staff for help. '
+        . 'or use "Forgot password?". If you were registered at the Botika ng Bayan counter, ask the administrator to create your online account. '
         . 'If you are a different person with the same name, add your middle name or suffix (e.g. Jr., Sr.).';
 
     public function register(Request $request)
