@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RequestController;
 use App\Http\Controllers\Api\ResidentController;
+use App\Http\Controllers\Api\StaffNotificationController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Middleware\EnsurePasswordChanged;
 use App\Http\Middleware\ExpireUnclaimedRequests;
@@ -80,6 +81,11 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
 
     // ---- Administrator + Pharmacy staff
     Route::middleware('role:admin,staff')->group(function () {
+        // Notifications for the administrator / pharmacy staff (the bell); expiry alerts are /inventory/alerts.
+        Route::get('/staff-notifications', [StaffNotificationController::class, 'index']);
+        Route::get('/staff-notifications/unread-count', [StaffNotificationController::class, 'unreadCount']);
+        Route::post('/staff-notifications/read-all', [StaffNotificationController::class, 'markAllRead']);
+        Route::post('/staff-notifications/{staffNotification}/read', [StaffNotificationController::class, 'markRead'])->whereNumber('staffNotification');
         Route::put('/account', [AccountController::class, 'update']); // My Profile (residents use /profile)
         Route::post('/account/photo', [AccountController::class, 'updatePhoto']);
         Route::delete('/account/photo', [AccountController::class, 'deletePhoto']);

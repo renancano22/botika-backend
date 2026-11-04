@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\InventoryService;
 use App\Services\PermissionService;
 use App\Services\SmsService;
+use App\Services\StaffNotifier;
 use App\Support\Listing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -32,7 +33,7 @@ class RequestController extends Controller
         'dispensing:dispensing_id,request_id,dispensed_by,dispensed_at', 'dispensing.dispenser:user_id,name',
     ];
 
-    public function __construct(private InventoryService $inventory, private SmsService $sms) {}
+    public function __construct(private InventoryService $inventory, private SmsService $sms, private StaffNotifier $staff) {}
 
     /**
      * Requests list, newest first. Residents only get their own requests.
@@ -154,6 +155,8 @@ class RequestController extends Controller
             $req->request_id,
             'submitted'
         );
+        // The pharmacy staff / administrator are notified in the app (the bell): a new request to review.
+        $this->staff->requestSubmitted($req);
 
         return response()->json($req->load('items.medicine'), 201);
     }
@@ -208,6 +211,7 @@ class RequestController extends Controller
             $medicineRequest->request_id,
             'cancelled'
         );
+        $this->staff->requestCancelled($medicineRequest, $wasReserved);
 
         return $medicineRequest->fresh(self::DETAILS);
     }
