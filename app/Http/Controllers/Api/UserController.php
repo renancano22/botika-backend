@@ -67,10 +67,12 @@ class UserController extends Controller
             $counter = Resident::whereNull('user_id')
                 ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w->where('name', 'like', Listing::like($search))
                     ->orWhere('contact_no', 'like', Listing::like($search))->orWhere('qr_code', 'like', Listing::like($search))))
+                ->withExists('requests as has_history') // requests or dispensing: such a record cannot be deleted
                 ->get(['resident_id', 'name', 'address', 'contact_no', 'qr_code', 'created_at'])
                 ->map(fn (Resident $r) => [
                     'user_id' => null, 'name' => $r->name, 'email' => null, 'role' => User::ROLE_RESIDENT, 'is_active' => true,
-                    'has_account' => false, 'created_at' => $r->created_at?->toISOString(), 'resident' => $r->toArray(),
+                    'has_account' => false, 'has_history' => (bool) $r->has_history, 'created_at' => $r->created_at?->toISOString(),
+                    'resident' => collect($r->toArray())->except('has_history')->all(),
                 ]);
 
             $all = $accounts->concat($counter);
@@ -116,6 +118,7 @@ class UserController extends Controller
             'email' => [...Rules::gmail($user->role !== User::ROLE_RESIDENT), Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')],
             'password' => 'prohibited', // passwords are only changed by Reset password or by the user
             'role' => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_STAFF, User::ROLE_RESIDENT])],
+            'barangay' => ['sometimes', 'nullable', 'string', Rule::in(config('botika.barangays'))], // residents: correct the barangay
         ], Rules::messages() + ['password.prohibited' => self::PASSWORD_PROHIBITED]);
 
         // A resident account must stay a resident (it is linked to a resident profile).
@@ -131,21 +134,20 @@ class UserController extends Controller
             return response()->json(['message' => 'You cannot change the role of your own account.'], 422);
         }
 
-        // Correcting a resident's name: it must not be another resident's name in the same barangay (no duplicates).
-        $resident = $user->resident;
-        if ($resident && Resident::normalName($data['name']) !== Resident::normalName($resident->name)
-            && Resident::possibleDuplicates($data['name'], (string) Resident::splitAddress($resident->address)['barangay'], $resident->resident_id)[0]->isNotEmpty()) {
-            return response()->json(['message' => Resident::NAME_TAKEN, 'errors' => ['name' => [Resident::NAME_TAKEN]]], 422);
-        }
+        // Correcting a resident's name or barangay: not into another resident's name in that barangay (no duplicates).
+        return DB::transaction(function () use ($user, $data) {
+            $resident = $user->resident;
+            if ($resident) {
+                $barangay = ($data['barangay'] ?? null) ?: (string) Resident::splitAddress($resident->address)['barangay'];
+                if ($error = $resident->correctIdentity($data['name'], $barangay)) {
+                    return response()->json(['message' => $error, 'errors' => ['name' => [$error]]], 422);
+                }
+            }
+            $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null, 'role' => $data['role']]);
+            $user->save();
 
-        $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null, 'role' => $data['role']]);
-        $user->save();
-
-        if ($user->resident) {
-            $user->resident->update(['name' => $data['name']]);
-        }
-
-        return $user->load('resident');
+            return $user->load('resident');
+        });
     }
 
     /**

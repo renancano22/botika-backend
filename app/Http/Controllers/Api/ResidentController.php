@@ -77,6 +77,38 @@ class ResidentController extends Controller
         return response()->json($this->dispensingRecord($resident->fresh()), 201);
     }
 
+    /**
+     * Administrator: correct a resident's registered name and barangay (e.g. a resident registered at the counter).
+     * Not into another resident's name in that barangay (no duplicate records).
+     */
+    public function correct(Request $request, Resident $resident)
+    {
+        $request->merge(['name' => preg_replace('/\s+/u', ' ', trim((string) $request->input('name')))]);
+        $data = $request->validate(['name' => Rules::name(), 'barangay' => Rules::barangay()], Rules::messages());
+
+        $error = DB::transaction(fn () => $resident->correctIdentity($data['name'], $data['barangay']));
+        if ($error) {
+            return response()->json(['message' => $error, 'errors' => ['name' => [$error]]], 422);
+        }
+        return $resident->fresh();
+    }
+
+    /**
+     * Administrator: delete a resident registered at the counter by mistake (e.g. a duplicate). Only a record with no
+     * online account and no requests or dispensing history, so no history is ever lost.
+     */
+    public function destroy(Resident $resident)
+    {
+        if ($resident->user_id) {
+            return response()->json(['message' => 'This resident has an online account. Deactivate the account instead.'], 422);
+        }
+        if ($resident->requests()->exists()) {
+            return response()->json(['message' => 'This resident has requests or dispensing records, so the record cannot be deleted (the history must be kept).'], 422);
+        }
+        $resident->delete();
+        return response()->json(['message' => 'Resident record deleted.']);
+    }
+
     /** QR Code / Resident ID verification before dispensing. */
     public function lookup(Request $request)
     {
@@ -148,6 +180,7 @@ class ResidentController extends Controller
     /** The verified resident, their approved medicine requests and their recent dispensing history. */
     private function dispensingRecord(Resident $resident): array
     {
+        $risks = app(\App\Services\InventoryService::class)->pickupRisks();
         return [
             'resident' => $resident,
             'approved_requests' => $resident->requests()
@@ -155,7 +188,9 @@ class ResidentController extends Controller
                 ->where('request_type', 'medicine')
                 ->where('status', 'approved')
                 ->orderBy('request_date')
-                ->get(),
+                ->get()
+                // Set-aside medicine that expires before pickup (or is no longer enough): staff see it before dispensing.
+                ->each(fn ($r) => $r->setAttribute('stock_warnings', $risks->get($r->request_id))),
             // With the request it was for (Request No., walk-in or online request).
             'dispensing_history' => Dispensing::with(['items.medicine', 'dispenser:user_id,name', 'request:request_id,remarks'])
                 ->whereHas('request', fn ($q) => $q->where('resident_id', $resident->resident_id))

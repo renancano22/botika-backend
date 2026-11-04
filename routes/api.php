@@ -136,6 +136,8 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
         Route::post('/users/{user}/toggle-active', [UserController::class, 'toggleActive']);
         Route::post('/users/{user}/reset-password', [UserController::class, 'resetPassword']);
         Route::post('/residents/{resident}/account', [UserController::class, 'createResidentAccount']); // registered at the counter → online account
+        Route::put('/residents/{resident}', [ResidentController::class, 'correct'])->whereNumber('resident');      // correct name / barangay
+        Route::delete('/residents/{resident}', [ResidentController::class, 'destroy'])->whereNumber('resident');   // counter record without history
 
         Route::post('/notifications/announce', [NotificationController::class, 'announce']);
 

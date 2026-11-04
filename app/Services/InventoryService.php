@@ -139,6 +139,75 @@ class InventoryService
         ]);
     }
 
+    /**
+     * Approved medicine requests whose set-aside medicine may not be there when the resident comes:
+     *  - not_enough: the unexpired stock now is less than all the quantity set aside for approved requests
+     *    (e.g. the stock that was set aside has expired);
+     *  - expires_before_pickup: on the request's pickup deadline, the stock that will still be unexpired is less than
+     *    what is set aside for the requests still waiting by then (a batch expires first). expires_on = the first such
+     *    expiration date: the resident should claim it before then.
+     * Dispensing never uses expired stock, so these requests could not be released in full after that date.
+     *
+     * @return Collection<int, array<int, array>> request_id => warnings (one per medicine)
+     */
+    public function pickupRisks(): Collection
+    {
+        $today = now()->toDateString();
+        $requests = MedicineRequest::with(['items.medicine:medicine_id,medicine_name,unit', 'resident:resident_id,name,qr_code'])
+            ->where('request_type', 'medicine')->where('status', 'approved')->whereNotNull('reviewed_at')
+            ->orderBy('reviewed_at')->get();
+        if ($requests->isEmpty()) {
+            return collect();
+        }
+
+        $batches = Inventory::whereIn('medicine_id', $requests->flatMap->items->pluck('medicine_id')->unique())
+            ->where('quantity', '>', 0)->whereDate('expiration_date', '>', $today)
+            ->get(['inventory_id', 'medicine_id', 'quantity', 'expiration_date'])
+            ->groupBy('medicine_id');
+
+        // What is set aside, per medicine: [pickup deadline (date), quantity] of every approved request.
+        $deadline = fn (MedicineRequest $r) => MedicineRequest::claimDeadline($r->reviewed_at)->toDateString();
+        $reserved = [];
+        foreach ($requests as $r) {
+            foreach ($r->items as $item) {
+                $reserved[$item->medicine_id][] = [$deadline($r), (int) $item->quantity];
+            }
+        }
+
+        $risks = collect();
+        foreach ($requests as $r) {
+            $due = $deadline($r);
+            foreach ($r->items as $item) {
+                $stock = $batches->get($item->medicine_id, collect());
+                $validNow = (int) $stock->sum('quantity');
+                $setAside = array_sum(array_column($reserved[$item->medicine_id], 1));
+                $validOnDue = (int) $stock->filter(fn ($b) => $b->expiration_date->toDateString() > $due)->sum('quantity');
+                $neededOnDue = array_sum(array_column(array_filter($reserved[$item->medicine_id], fn ($x) => $x[0] >= $due), 1));
+
+                $reason = $validNow < $setAside ? 'not_enough' : ($validOnDue < $neededOnDue ? 'expires_before_pickup' : null);
+                if (! $reason) {
+                    continue;
+                }
+                $expiresOn = $stock->filter(fn ($b) => $b->expiration_date->toDateString() <= $due)->min(fn ($b) => $b->expiration_date->toDateString());
+                $risks[$r->request_id] = [...($risks[$r->request_id] ?? []), [
+                    'request_id' => $r->request_id,
+                    'resident' => $r->resident?->name,
+                    'qr_code' => $r->resident?->qr_code,
+                    'claim_by' => $r->claim_by,
+                    'medicine_id' => $item->medicine_id,
+                    'medicine_name' => $item->medicine?->medicine_name,
+                    'unit' => $item->medicine?->unit,
+                    'quantity' => (int) $item->quantity,
+                    'reason' => $reason,
+                    'expires_on' => $reason === 'expires_before_pickup' ? $expiresOn : null,
+                    'unexpired_stock' => $validNow,
+                    'set_aside' => $setAside,
+                ]];
+            }
+        }
+        return $risks;
+    }
+
     /** Stock Alert System: low stock, near-expiry and expired batches. */
     public function alerts(): array
     {
@@ -177,6 +246,8 @@ class InventoryService
             'unrecorded' => $unrecorded,
             'near_expiry' => $nearExpiry,
             'expired' => $expired,
+            // Approved requests whose set-aside medicine expires before pickup / is no longer enough.
+            'pickup_risks' => $this->pickupRisks()->flatten(1)->values(),
         ];
     }
 

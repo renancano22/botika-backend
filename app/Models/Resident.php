@@ -117,4 +117,22 @@ class Resident extends Model
 
     /** The message when a name is already registered to another resident of the same barangay (account edits). */
     public const NAME_TAKEN = 'Another resident in this barangay is already registered with this name. If this is a different person, add the middle name or suffix (e.g. Jr., Sr.) to tell them apart.';
+
+    /**
+     * The administrator corrects the registered name and/or barangay (residents cannot change them themselves).
+     * Refused when another resident in that barangay already has this name (no duplicate records).
+     * @return string|null null when saved, otherwise why it was refused
+     */
+    public function correctIdentity(string $name, string $barangay): ?string
+    {
+        $current = self::splitAddress($this->address);
+        $sameName = self::normalName($name) === self::normalName($this->name);
+        if (! ($sameName && $barangay === $current['barangay'])
+            && self::possibleDuplicates($name, $barangay, $this->resident_id)[0]->isNotEmpty()) {
+            return self::NAME_TAKEN;
+        }
+        $this->update(['name' => $name, 'address' => self::composeAddress($current['address_line'], $barangay)]);
+        $this->user?->update(['name' => $name]);
+        return null;
+    }
 }

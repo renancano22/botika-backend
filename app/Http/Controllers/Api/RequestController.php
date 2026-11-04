@@ -47,7 +47,9 @@ class RequestController extends Controller
             Listing::validateDates($request);
             $dir = Listing::sort($request, ['newest', 'oldest']) === 'oldest' ? 'asc' : 'desc';
             $query = $this->filtered($request)->with(self::DETAILS)->orderBy('request_date', $dir)->orderBy('request_id', $dir);
-            return Listing::paginate($query, $request);
+            // Staff/admin: approved requests whose set-aside medicine expires before pickup (or is no longer enough).
+            $risks = $user->role !== User::ROLE_RESIDENT ? $this->inventory->pickupRisks() : collect();
+            return Listing::paginate($query, $request, fn ($rows) => $rows->each(fn ($r) => $r->setAttribute('stock_warnings', $risks->get($r->request_id))));
         }
 
         return $this->filtered($request)->with(self::DETAILS)
