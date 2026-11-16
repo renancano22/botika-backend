@@ -22,14 +22,37 @@ class AuthController extends Controller
 
     public function register(Request $request)
     {
+        // Validate types before trimming/normalizing; malformed JSON must return field errors, not a server error.
+        $request->validate([
+            'name' => ['required', 'string', 'max:100'],
+            'email' => ['nullable', 'string', 'max:255'],
+            'contact_no' => ['required', 'string', 'max:24'],
+            'barangay' => ['required', 'string'],
+            'address_line' => ['nullable', 'string', 'max:120', 'not_regex:/[\x00-\x1f\x7f]/'],
+            'password' => ['required', 'string', 'max:100'],
+            'password_confirmation' => ['required', 'string', 'max:100'],
+        ], [
+            'name.required' => 'Enter your full name.',
+            'contact_no.required' => 'Enter your mobile number.',
+            'barangay.required' => 'Choose your barangay of Bulan.',
+            'password.required' => 'Create a password.',
+            'password_confirmation.required' => 'Confirm your password.',
+            'address_line.not_regex' => 'The address must not contain line breaks or control characters.',
+        ]);
+        $mobile = preg_replace('/[\s()\-]/', '', $request->input('contact_no'));
+        $validMobileFormat = preg_match('/^(?:09\d{9}|9\d{9}|\+?639\d{9})$/', $mobile);
         $request->merge([
-            'contact_no' => Resident::normalizePhone($request->input('contact_no')),
+            'contact_no' => $validMobileFormat ? Resident::normalizePhone($mobile) : $request->input('contact_no'),
             'email' => $request->filled('email') ? strtolower(trim($request->input('email'))) : null,
-            'name' => trim((string) $request->input('name')),
+            'name' => preg_replace('/\s+/u', ' ', trim($request->input('name'))),
+            'barangay' => trim($request->input('barangay')),
+            'address_line' => $request->filled('address_line') ? trim($request->input('address_line')) : null,
         ]);
 
         $data = $request->validate([
-            'name' => Rules::name(),
+            'name' => ['bail', ...Rules::name(), function (string $attribute, mixed $value, \Closure $fail) {
+                if (preg_match_all('/\pL/u', $value) < 2) $fail('Enter a name with at least two letters.');
+            }],
             'email' => [...Rules::gmail(false), 'unique:users,email'],
             'password' => [...Rules::password(true, [$request->input('name'), $request->input('email'), $request->input('contact_no')]), 'confirmed'],
             'barangay' => Rules::barangay(),
@@ -39,6 +62,7 @@ class AuthController extends Controller
             'contact_no.regex' => 'Enter a valid mobile number, e.g. 09171234567.',
             'contact_no.unique' => 'This mobile number is already registered. Please log in instead.',
             'email.unique' => 'This email is already registered. Please log in instead.',
+            'password.confirmed' => 'The two passwords do not match.',
         ]);
 
         // Already registered? The same name in the same barangay is refused, as in registration by the staff, so one
