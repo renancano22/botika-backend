@@ -30,7 +30,7 @@ class CounterResidentAccountTest extends TestCase
     public function test_admin_creates_an_online_account_for_a_counter_resident(): void
     {
         config(['sms.semaphore.api_key' => 'test-key']);
-        Http::fake(['*' => Http::response([['message_id' => 1]], 200)]);
+        Http::fake(['*' => Http::response([['message_id' => 1, 'status' => 'Pending']], 200)]);
         Mail::fake();
         $admin = ['Authorization' => 'Bearer ' . User::factory()->admin()->create()->createToken('t')->plainTextToken];
         $staff = ['Authorization' => 'Bearer ' . User::factory()->create()->createToken('t')->plainTextToken];
@@ -65,7 +65,7 @@ class CounterResidentAccountTest extends TestCase
         $password = null;
         Http::assertSent(function (HttpRequest $r) use (&$password) {
             if (preg_match('/temporary password: (\S+) /', $r['message'] ?? '', $m)) $password = $m[1];
-            return $r['number'] === '09175550000';
+            return $r['number'] === '639175550000';
         });
         $this->assertNotNull($password);
         $this->assertStringNotContainsString($password, $res->getContent());

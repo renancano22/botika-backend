@@ -43,7 +43,7 @@ class ResidentPasswordResetTest extends TestCase
     private function smsReady(int $status = 200): void
     {
         config(['sms.semaphore.api_key' => 'test-key']);
-        Http::fake(['*' => Http::response([['message_id' => 1]], $status)]);
+        Http::fake(['*' => Http::response([['message_id' => 1, 'status' => 'Pending']], $status)]);
     }
 
     public function test_reset_password_is_sent_to_the_resident_by_sms_and_email_and_not_shown_to_the_admin(): void
@@ -67,7 +67,7 @@ class ResidentPasswordResetTest extends TestCase
         $this->assertStringContainsString($password, Mail::sent(TemporaryPasswordMail::class)->first()->render());
 
         // SMS: to the resident's registered mobile number, with the same temporary password.
-        Http::assertSent(fn (HttpRequest $r) => $r['number'] === '09171234567' && str_contains($r['message'], $password));
+        Http::assertSent(fn (HttpRequest $r) => $r['number'] === '639171234567' && str_contains($r['message'], $password));
 
         // The administrator's response, the SMS log and the in-app notifications never contain it.
         $this->assertStringNotContainsString($password, $res->getContent());
