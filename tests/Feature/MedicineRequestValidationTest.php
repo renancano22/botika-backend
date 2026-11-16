@@ -48,7 +48,7 @@ class MedicineRequestValidationTest extends TestCase
 
     public function test_list_shape_duplicates_and_medicine_ids_are_validated(): void
     {
-        foreach ([[], ['bad'], ['first' => ['medicine_id' => 1, 'quantity' => 1]], array_fill(0, 21, ['medicine_id' => 1, 'quantity' => 1]),
+        foreach ([[], ['bad'], ['first' => ['medicine_id' => 1, 'quantity' => 1]], array_fill(0, 6, ['medicine_id' => 1, 'quantity' => 1]),
             [['medicine_id' => $this->medicine->medicine_id, 'quantity' => 1], ['medicine_id' => $this->medicine->medicine_id, 'quantity' => 1]],
             [['medicine_id' => [1], 'quantity' => 1]], [['medicine_id' => 999999, 'quantity' => 1]]] as $items) {
             $this->postJson('/api/requests', $this->payload(['items' => $items]), $this->headers)->assertUnprocessable();
@@ -63,6 +63,21 @@ class MedicineRequestValidationTest extends TestCase
         }
         $this->postJson('/api/requests', $this->payload(['note' => "As advised\nby my doctor."]), $this->headers)->assertCreated();
         $this->assertDatabaseHas('requests', ['resident_note' => "As advised\nby my doctor."]);
+    }
+
+    public function test_five_distinct_medicines_are_allowed_but_six_are_refused(): void
+    {
+        $items = [['medicine_id' => $this->medicine->medicine_id, 'quantity' => 1]];
+        for ($i = 2; $i <= 6; $i++) {
+            $medicine = Medicine::create(['medicine_name' => "Medicine {$i}", 'category' => 'Analgesic', 'unit' => 'tablet', 'reorder_level' => 5]);
+            Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 5, 'expiration_date' => now()->addYear()->toDateString()]);
+            $items[] = ['medicine_id' => $medicine->medicine_id, 'quantity' => 1];
+        }
+        $this->postJson('/api/requests', $this->payload(['items' => $items]), $this->headers)
+            ->assertUnprocessable()->assertJsonPath('errors.items.0', 'One request can have at most 5 medicines.');
+        $this->assertDatabaseCount('requests', 0);
+        $this->postJson('/api/requests', $this->payload(['items' => array_slice($items, 0, 5)]), $this->headers)
+            ->assertCreated()->assertJsonCount(5, 'items');
     }
 
     public function test_prescription_data_types_encoding_content_and_size_are_validated(): void

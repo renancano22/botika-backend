@@ -308,7 +308,7 @@ class RequestController extends Controller
     {
         $restock = $withType && $request->input('request_type') === 'restock';
         $rules = [
-            'items' => 'required|array|list|min:1|max:20',
+            'items' => 'required|array|list|min:1|max:5',
             'items.*' => 'required|array',
             'items.*.medicine_id' => 'bail|required|integer|distinct|exists:medicines,medicine_id',
         ];
@@ -326,7 +326,7 @@ class RequestController extends Controller
             'items.*.medicine_id.distinct' => 'This medicine is already in your request.',
             'items.required' => 'Add at least one medicine.',
             'items.min' => 'Add at least one medicine.',
-            'items.max' => 'One request can have at most 20 medicines.',
+            'items.max' => 'One request can have at most :max medicines.',
         ]);
         $data['items'] = array_map(fn ($i) => [
             'medicine_id' => (int) $i['medicine_id'],
