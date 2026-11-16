@@ -12,6 +12,7 @@ RUN apt-get update \
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
+RUN printf 'post_max_size=16M\nupload_max_filesize=4M\n' > /usr/local/etc/php/conf.d/botika-uploads.ini
 
 # Install PHP packages first (cached between deploys when composer files don't change)
 COPY composer.json composer.lock ./

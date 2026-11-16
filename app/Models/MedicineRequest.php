@@ -41,6 +41,19 @@ class MedicineRequest extends Model
         return $this->hasOne(Prescription::class, 'request_id', 'request_id');
     }
 
+    public function prescriptions(): HasMany
+    {
+        return $this->hasMany(Prescription::class, 'request_id', 'request_id')->orderBy('prescription_id');
+    }
+
+    public function missingPrescriptionMedicineIds(): array
+    {
+        $this->loadMissing(['items.medicine', 'prescriptions']);
+        $covered = $this->prescriptions->flatMap(fn ($file) => $file->medicine_ids ?? [])->map(fn ($id) => (int) $id)->all();
+        return $this->items->filter(fn ($item) => $item->medicine?->requires_prescription && ! in_array((int) $item->medicine_id, $covered, true))
+            ->pluck('medicine_id')->map(fn ($id) => (int) $id)->values()->all();
+    }
+
     public function prescriptionVerifier(): BelongsTo
     {
         return $this->belongsTo(User::class, 'prescription_verified_by', 'user_id');

@@ -11,14 +11,16 @@ class Prescription extends Model
     protected $primaryKey = 'prescription_id';
     public $timestamps = false;
 
-    protected $fillable = ['request_id', 'file_name', 'mime_type', 'size', 'file_data', 'uploaded_at'];
-    protected $casts = ['uploaded_at' => 'datetime', 'size' => 'integer'];
+    protected $fillable = ['request_id', 'file_name', 'mime_type', 'size', 'file_data', 'uploaded_at', 'medicine_ids'];
+    protected $casts = ['uploaded_at' => 'datetime', 'size' => 'integer', 'medicine_ids' => 'array'];
 
     /** The file itself is only sent when someone opens it. */
     protected $hidden = ['file_data'];
 
     public const MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
     public const MAX_BYTES = 4 * 1024 * 1024; // 4 MB
+    public const MAX_FILES = 5;
+    public const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 
     public function request(): BelongsTo
     {

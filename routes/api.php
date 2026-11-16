@@ -49,6 +49,7 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
             Route::get('/requests', [RequestController::class, 'index']);
             Route::get('/requests/{medicineRequest}', [RequestController::class, 'show'])->whereNumber('medicineRequest');
             Route::get('/requests/{medicineRequest}/prescription', [RequestController::class, 'showPrescription'])->whereNumber('medicineRequest');
+            Route::get('/requests/{medicineRequest}/prescriptions/{prescription}', [RequestController::class, 'showPrescription'])->whereNumber(['medicineRequest', 'prescription']);
         });
         Route::get('/dispensing', [DispensingController::class, 'index'])->middleware('permission:dispensing.records|history.view');
         Route::get('/notifications', [NotificationController::class, 'index'])->middleware('permission:notifications.view');
