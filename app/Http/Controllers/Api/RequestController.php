@@ -120,8 +120,9 @@ class RequestController extends Controller
             ? Medicine::whereIn('medicine_id', array_column($data['items'], 'medicine_id'))->where('requires_prescription', true)->pluck('medicine_name')
             : collect();
         $prescription = $rxNames->isNotEmpty() ? $this->validatePrescription($request, $rxNames->implode(', ')) : null;
-        $note = $request->validate(['note' => 'nullable|string|max:500'], [
+        $note = $request->validate(['note' => ['nullable', 'string', 'max:500', 'not_regex:/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/']], [
             'note.max' => 'Please keep your note under 500 characters.',
+            'note.not_regex' => 'Remove unsupported control characters from your note.',
         ])['note'] ?? null;
         if ($data['request_type'] === 'restock') {
             $this->checkNoOpenRestock($resident->resident_id, array_column($data['items'], 'medicine_id'));
@@ -169,6 +170,10 @@ class RequestController extends Controller
         abort_if($medicineRequest->request_type === 'restock', 422, 'A restock request has no quantity to change. You can cancel it instead.');
 
         $data = $this->validateItems($request, false);
+        $existingIds = $medicineRequest->items()->pluck('medicine_id')->all();
+        if (array_diff(array_column($data['items'], 'medicine_id'), $existingIds)) {
+            throw ValidationException::withMessages(['items' => 'Submit a new request to add a different medicine and its prescription. You can only change quantities or remove medicines here.']);
+        }
         $this->checkAvailability($medicineRequest->request_type, $data['items']);
 
         DB::transaction(function () use ($medicineRequest, $data) {
@@ -303,8 +308,9 @@ class RequestController extends Controller
     {
         $restock = $withType && $request->input('request_type') === 'restock';
         $rules = [
-            'items' => 'required|array|min:1|max:20',
-            'items.*.medicine_id' => 'required|distinct|exists:medicines,medicine_id',
+            'items' => 'required|array|list|min:1|max:20',
+            'items.*' => 'required|array',
+            'items.*.medicine_id' => 'bail|required|integer|distinct|exists:medicines,medicine_id',
         ];
         if (! $restock) {
             $rules['items.*.quantity'] = 'required|integer|min:1|max:' . config('botika.max_request_quantity');
@@ -445,7 +451,14 @@ class RequestController extends Controller
         }
 
         // "data:image/jpeg;base64,...." — check the type, then that the rest is plain base64 text.
-        $data = (string) $input['data'];
+        if (! is_string($input['data']) || ! is_string($input['name'] ?? null)
+            || trim($input['name']) === '' || mb_strlen($input['name']) > 200) {
+            throw ValidationException::withMessages(['prescription' => 'Choose a prescription file with a filename of 1–200 characters.']);
+        }
+        $data = $input['data'];
+        if (strlen($data) > (int) ceil(Prescription::MAX_BYTES / 3) * 4 + 100) {
+            throw ValidationException::withMessages(['prescription' => 'The prescription file is too large (4 MB at most).']);
+        }
         $comma = strpos($data, ',');
         $isFile = $comma !== false && $comma < 100
             && preg_match('#^data:([a-z/+.-]+);base64$#', substr($data, 0, $comma), $m)
@@ -454,9 +467,19 @@ class RequestController extends Controller
         if (! $isFile || $base64 === '' || strspn($base64, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=') !== strlen($base64)) {
             throw ValidationException::withMessages(['prescription' => 'The prescription must be a JPG, PNG or PDF file.']);
         }
-        $size = (int) floor(strlen($base64) * 3 / 4);
+        $bytes = base64_decode($base64, true);
+        if ($bytes === false || $bytes === '' || base64_encode($bytes) !== $base64) {
+            throw ValidationException::withMessages(['prescription' => 'The prescription file is empty or corrupted. Upload it again.']);
+        }
+        $size = strlen($bytes);
         if ($size > Prescription::MAX_BYTES) {
             throw ValidationException::withMessages(['prescription' => 'The prescription file is too large (4 MB at most).']);
+        }
+        $actualMime = $m[1] === 'application/pdf'
+            ? (str_starts_with($bytes, '%PDF-') ? (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes) : false)
+            : ((@getimagesizefromstring($bytes))['mime'] ?? false);
+        if ($actualMime !== $m[1]) {
+            throw ValidationException::withMessages(['prescription' => 'The uploaded file does not match its type. Choose a valid JPG, PNG, WebP or PDF.']);
         }
 
         return [

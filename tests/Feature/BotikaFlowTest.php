@@ -493,11 +493,11 @@ class BotikaFlowTest extends TestCase
         $this->postJson('/api/requests', ['request_type' => 'medicine', 'prescription' => ['name' => 'rx.txt', 'data' => 'data:text/plain;base64,aGVsbG8='],
             'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 10]]], $headers)->assertStatus(422);
 
-        $file = 'data:image/jpeg;base64,' . base64_encode('fake-photo-of-prescription');
-        $id = $this->postJson('/api/requests', ['request_type' => 'medicine', 'prescription' => ['name' => 'Prescription.jpg', 'data' => $file],
+        $file = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jpa0AAAAASUVORK5CYII=';
+        $id = $this->postJson('/api/requests', ['request_type' => 'medicine', 'prescription' => ['name' => 'Prescription.png', 'data' => $file],
             'items' => [['medicine_id' => $rx->medicine_id, 'quantity' => 10]]], $headers)->assertCreated()->json('request_id');
 
-        $this->getJson("/api/requests/{$id}", $headers)->assertJsonPath('prescription.file_name', 'Prescription.jpg')
+        $this->getJson("/api/requests/{$id}", $headers)->assertJsonPath('prescription.file_name', 'Prescription.png')
             ->assertJsonMissingPath('prescription.file_data');
         $this->getJson("/api/requests/{$id}/prescription", $this->token($staff))->assertOk()->assertJsonPath('data', $file);
 
