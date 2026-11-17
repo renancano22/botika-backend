@@ -9,18 +9,16 @@ class ForecastSampleData
 {
     public static function make(int $months): array
     {
-        // Start in the latest September that has finished. Never fabricate future actuals.
-        $start = now()->startOfYear()->month(9)->startOfMonth();
-        if ($start->copy()->addMonth()->greaterThan(now()->startOfMonth())) {
-            $start->subYear();
-        }
+        // Six complete months before the current month, plus a partial current-month sample.
+        // Move with the calendar so the demo never uses fictional future actuals.
+        $start = now()->startOfMonth()->subMonthsNoOverflow(6);
         $window = now()->startOfMonth()->subMonthsNoOverflow($months - 1);
         $empty = [];
         for ($date = $window->copy(); $date->lessThanOrEqualTo(now()->startOfMonth()); $date->addMonthNoOverflow()) {
             $empty[$date->format('Y-m')] = 0;
         }
 
-        // September totals: 60, 40, 30. October: 90, 40, 25. Rising, steady and falling demand.
+        // Rising, steady and falling demand over the six complete sample months.
         $definitions = [
             [-1, 'Paracetamol 500mg (sample)', 'Analgesic', 60, 30, 45],
             [-2, 'Cetirizine 10mg (sample)', 'Antihistamine', 40, 0, 180],

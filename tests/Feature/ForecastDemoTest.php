@@ -40,7 +40,7 @@ class ForecastDemoTest extends TestCase
             ->mapWithKeys(fn ($class) => [$class => $class::all()->toArray()])->all();
     }
 
-    public function test_september_demo_uses_real_algorithms_without_writes_or_sms(): void
+    public function test_six_month_demo_uses_real_algorithms_without_writes_or_sms(): void
     {
         $this->travelTo(Carbon::parse('2026-11-17 12:00:00'));
         Http::fake();
@@ -49,24 +49,30 @@ class ForecastDemoTest extends TestCase
         Inventory::create(['medicine_id' => $medicine->medicine_id, 'quantity' => 123, 'expiration_date' => '2027-12-01']);
         $before = $this->operationalSnapshot();
 
-        $response = $this->getJson('/api/forecasts?demo=1&months=6&horizon=3&method=moving_average', $headers)
+        $response = $this->getJson('/api/forecasts?demo=1&months=12&horizon=3&method=moving_average', $headers)
             ->assertOk()->assertJsonPath('demo', true)->assertJsonPath('last_generated', null)
-            ->assertJsonPath('first_record_date', '2026-09-01')
-            ->assertJsonPath('basis.months', ['2026-09', '2026-10'])
+            ->assertJsonPath('first_record_date', '2026-05-01')
+            ->assertJsonPath('basis.months', ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'])
+            ->assertJsonPath('basis.complete_months', 6)
             ->assertJsonPath('basis.partial', false)->assertJsonPath('medicines_with_records', 3)
-            ->assertJsonPath('methods_info.linear_regression.available', false)
-            ->assertJsonPath('method_error.moving_average', null)
+            ->assertJsonPath('methods_info.linear_regression.available', true)
+            ->assertJsonPath('methods_info.linear_regression.provisional', false)
             ->assertJsonPath('top_barangays', [])->assertJsonPath('top_medicines', []);
         $row = $response->json('results.0');
         $this->assertSame(-1, $row['medicine_id']);
-        $this->assertSame(60, $row['history']['2026-09']);
-        $this->assertSame(90, $row['history']['2026-10']);
-        $this->assertSame(68, $row['history']['2026-11']);
-        $this->assertEquals([75, 75, 75], $row['methods']['moving_average']['monthly']);
-        $this->assertEquals([69, 69, 69], $row['methods']['exponential_smoothing']['monthly']);
-        $this->assertSame(225, $row['predicted_demand']);
-        $this->assertSame(190, $row['recommended_restock']); // 225 + reorder 10 - sample stock 45
-        $this->assertNull($row['methods']['linear_regression']);
+        $this->assertSame(60, $row['history']['2026-05']);
+        $this->assertSame(210, $row['history']['2026-10']);
+        $this->assertSame(136, $row['history']['2026-11']);
+        $this->assertEquals([180, 180, 180], $row['methods']['moving_average']['monthly']);
+        $this->assertEquals([151.76, 151.76, 151.76], $row['methods']['exponential_smoothing']['monthly']);
+        $this->assertEquals([240, 270, 300], $row['methods']['linear_regression']['monthly']);
+        $this->assertSame(540, $row['predicted_demand']);
+        $this->assertSame(505, $row['recommended_restock']); // 540 + reorder 10 - sample stock 45
+        foreach ($response->json('methods_info') as $info) {
+            $this->assertTrue($info['available']);
+            $this->assertFalse($info['provisional']);
+        }
+        foreach ($response->json('method_error') as $error) $this->assertNotNull($error);
 
         $this->postJson('/api/forecasts/generate', ['demo' => true], $headers)->assertStatus(422);
         $this->assertSame($before, $this->operationalSnapshot());
@@ -76,15 +82,15 @@ class ForecastDemoTest extends TestCase
             ->assertJsonPath('results.0.medicine_name', 'Real medicine')->assertJsonPath('results.0.available_stock', 123);
     }
 
-    public function test_demo_supports_trend_and_backtesting_only_after_enough_complete_months(): void
+    public function test_six_complete_sample_months_are_preserved_across_the_year_boundary(): void
     {
         $this->travelTo(Carbon::parse('2027-01-17 12:00:00'));
         $response = $this->getJson('/api/forecasts?demo=1&method=linear_regression&horizon=3', $this->headersFor())
-            ->assertOk()->assertJsonPath('first_record_date', '2026-09-01')
-            ->assertJsonPath('basis.months', ['2026-09', '2026-10', '2026-11', '2026-12'])
+            ->assertOk()->assertJsonPath('first_record_date', '2026-07-01')
+            ->assertJsonPath('basis.months', ['2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12'])
             ->assertJsonPath('methods_info.linear_regression.available', true)
-            ->assertJsonPath('methods_info.linear_regression.provisional', true);
-        $this->assertEquals([180, 210, 240], $response->json('results.0.methods.linear_regression.monthly'));
+            ->assertJsonPath('methods_info.linear_regression.provisional', false);
+        $this->assertEquals([240, 270, 300], $response->json('results.0.methods.linear_regression.monthly'));
         $this->assertEquals(0, $response->json('results.0.methods.linear_regression.mae'));
     }
 
