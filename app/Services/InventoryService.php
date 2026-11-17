@@ -325,7 +325,8 @@ class InventoryService
                 $req->resident,
                 "BulanBotikaCare: Pickup reminder for request No. {$req->request_id} ({$req->itemsSummary()}). Pickup date: {$pickup}. "
                     . "Please claim it at Botika ng Bayan Bulan on or before {$deadline}, within {$days} days from the pickup date. "
-                    . 'If not claimed by then, the medicine will no longer be given and the request will no longer be valid for pickup. Bring your Resident ID/QR and a valid ID or Barangay ID.',
+                    . 'If not claimed by then, the medicine will no longer be given and the request will no longer be valid for pickup. Bring your Resident ID/QR and a valid ID or Barangay ID.'
+                    . ($req->prescriptionMedicines()->isNotEmpty() ? ' Bring all original prescriptions when claiming your medicines.' : ''),
                 $req->request_id,
                 'reminder'
             );

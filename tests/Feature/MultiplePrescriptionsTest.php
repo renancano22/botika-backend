@@ -95,6 +95,38 @@ class MultiplePrescriptionsTest extends TestCase
         $this->postJson("/api/requests/{$id}/prescription", ['prescriptions' => $this->files()], $this->headers)->assertUnprocessable();
     }
 
+    public function test_approval_and_pickup_reminder_include_all_original_prescriptions_only_when_needed(): void
+    {
+        config(['sms.semaphore.api_key' => '']);
+        $staff = ['Authorization' => 'Bearer ' . User::factory()->create()->createToken('t')->plainTextToken];
+        $requests = [];
+        $reminder = 'Bring all original prescriptions when claiming your medicines.';
+        foreach ([true, false] as $needsPrescription) {
+            $items = $needsPrescription ? array_slice($this->ids, 0, 3) : [$this->ids[3]];
+            $response = $this->postJson('/api/requests', [
+                'request_type' => 'medicine',
+                'items' => array_map(fn ($id) => ['medicine_id' => $id, 'quantity' => 2], $items),
+                ...($needsPrescription ? ['prescriptions' => $this->files()] : []),
+            ], $this->headers)->assertCreated();
+            $id = $response->json('request_id');
+            $this->postJson("/api/requests/{$id}/approve", $needsPrescription ? [
+                'prescription_verified' => true,
+                'verified_prescription_ids' => array_column($response->json('prescriptions'), 'prescription_id'),
+            ] : [], $staff)->assertOk();
+            $message = DB::table('notifications')->where('request_id', $id)->where('type', 'approved')->value('message');
+            $this->assertSame($needsPrescription, str_contains($message, $reminder));
+            $requests[$id] = $needsPrescription;
+        }
+        $this->travel(max(0, config('botika.unclaimed_days') - 1))->days();
+        $this->assertSame(2, app(\App\Services\InventoryService::class)->checkPickupDeadlines()['reminded']);
+        foreach ($requests as $id => $needsPrescription) {
+            $message = DB::table('notifications')->where('request_id', $id)->where('type', 'reminder')->value('message');
+            $this->assertSame($needsPrescription, str_contains($message, $reminder));
+        }
+        $this->assertSame(0, app(\App\Services\InventoryService::class)->checkPickupDeadlines()['reminded']);
+        $this->assertSame(2, DB::table('notifications')->where('type', 'reminder')->count());
+    }
+
     public function test_replacement_keeps_explicit_existing_files_and_failure_keeps_every_original(): void
     {
         $res = $this->submit()->assertCreated(); $id = $res->json('request_id'); $files = $res->json('prescriptions');

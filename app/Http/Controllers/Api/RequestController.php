@@ -253,7 +253,9 @@ class RequestController extends Controller
                 $days = config('botika.unclaimed_days');
                 $message = "BulanBotikaCare: Request No. {$medicineRequest->request_id} is APPROVED and ready for pickup at Botika ng Bayan Bulan "
                     . "({$medicineRequest->itemsSummary()}). Pickup date: {$pickup}. Claim it on or before {$deadline} ({$days} days). "
-                    . "Bring your Resident ID/QR {$medicineRequest->resident->qr_code} and a valid ID or Barangay ID. After the deadline, the medicine will no longer be given.";
+                    . "Bring your Resident ID/QR {$medicineRequest->resident->qr_code} and a valid ID or Barangay ID. "
+                    . ($rxNames->isNotEmpty() ? 'Bring all original prescriptions when claiming your medicines. ' : '')
+                    . 'After the deadline, the medicine will no longer be given.';
             } else {
                 $message = "BulanBotikaCare: Your restock request No. {$medicineRequest->request_id} ({$medicineRequest->itemsSummary()}) is APPROVED. "
                     . 'We will notify you once the medicine is available at Botika ng Bayan Bulan. No action is needed for now.';
