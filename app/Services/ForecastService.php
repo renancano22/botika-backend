@@ -495,15 +495,15 @@ class ForecastService
     /**
      * Forecasts every medicine (or only $medicineIds) with all three methods.
      */
-    private function compute(int $months, int $horizon, ?array $medicineIds = null): array
+    private function compute(int $months, int $horizon, ?array $medicineIds = null, ?array $sample = null): array
     {
         $historyKeys = self::monthKeys(self::historyStart($months), $months);
         $forecastKeys = self::monthKeys(self::forecastStart(), $horizon);
-        $histories = $this->monthlyHistories($months, $medicineIds);
+        $histories = $sample['histories'] ?? $this->monthlyHistories($months, $medicineIds);
         $current = now()->format('Y-m');
 
         // Months before the system's first dispensing record are "no data yet", not "zero demand".
-        $firstDate = self::firstRecordDate();
+        $firstDate = $sample !== null ? $sample['first_date'] : self::firstRecordDate();
         $first = $firstDate === null ? null : substr($firstDate, 0, 7);
         $dataStart = $first === null ? null : max($first, $historyKeys[0]);
         $recorded = $dataStart === null ? [] : array_values(array_filter($historyKeys, fn ($k) => $k >= $dataStart));
@@ -515,7 +515,7 @@ class ForecastService
         $partial = $recorded !== [] && $complete === [];
         $n = count($basis);
 
-        $medicines = Medicine::withAvailableStock()
+        $medicines = $sample['medicines'] ?? Medicine::withAvailableStock()
             ->when($medicineIds !== null, fn ($q) => $q->whereIn('medicine_id', $medicineIds))
             ->orderBy('medicine_name')
             ->get();
@@ -530,10 +530,10 @@ class ForecastService
             ->selectRaw('request_items.medicine_id, SUM(request_items.quantity) as total')
             ->pluck('total', 'medicine_id')
             ->map(fn ($qty) => (int) $qty);
-        $pending = $open('medicine', ['pending']);
-        $reserved = $open('medicine', ['approved']); // set aside for residents, to be dispensed from the current stock
+        $pending = $sample !== null ? [] : $open('medicine', ['pending']);
+        $reserved = $sample !== null ? [] : $open('medicine', ['approved']); // set aside for residents, to be dispensed from the current stock
         // Restock requests have no quantity: the number of waiting restock requests per medicine.
-        $restockWaiting = RequestItem::query()
+        $restockWaiting = $sample !== null ? [] : RequestItem::query()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->where('requests.request_type', 'restock')
             ->whereIn('requests.status', ['pending', 'approved'])
@@ -656,6 +656,19 @@ class ForecastService
     public function analyze(int $months, int $horizon, ?string $method = null): array
     {
         $data = $this->compute($months, $horizon);
+        return $this->report($data, $months, $horizon, $method);
+    }
+
+    /** Synthetic history only in memory: never creates dispensing, residents, stock or saved forecasts. */
+    public function analyzeDemo(int $months, int $horizon, ?string $method = null): array
+    {
+        $sample = ForecastSampleData::make($months);
+        $data = $this->compute($months, $horizon, sample: $sample);
+        return $this->report($data, $months, $horizon, $method, true);
+    }
+
+    private function report(array $data, int $months, int $horizon, ?string $method, bool $demo = false): array
+    {
         $best = self::mostAccurate($data['method_error']);
         $requested = $method;
         // A method that cannot forecast with the records available is not used (the page disables it).
@@ -667,6 +680,7 @@ class ForecastService
         $since = self::historyStart($months);
 
         return [
+            'demo' => $demo,
             'generated_at' => now()->toDateTimeString(),
             'history_months' => $months,
             'horizon' => $horizon,
@@ -692,8 +706,8 @@ class ForecastService
                 'potential_stockouts' => count(array_filter($results, fn ($r) => $r['priority'] === 'high')),
                 'restock_recommendations' => count(array_filter($results, fn ($r) => $r['recommended_restock'] > 0)),
             ],
-            'top_barangays' => $this->topBarangays($since),
-            'top_medicines' => $this->topRequestedMedicines($since),
+            'top_barangays' => $demo ? [] : $this->topBarangays($since),
+            'top_medicines' => $demo ? [] : $this->topRequestedMedicines($since),
             'results' => $results,
         ];
     }

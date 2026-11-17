@@ -20,7 +20,11 @@ class ForecastController extends Controller
      */
     public function index(Request $request)
     {
-        return $this->forecast->analyze(...$this->options($request)) + ['last_generated' => $this->lastGenerated()];
+        $options = $this->options($request);
+        if ($request->boolean('demo')) {
+            return $this->forecast->analyzeDemo(...$options) + ['last_generated' => null];
+        }
+        return $this->forecast->analyze(...$options) + ['last_generated' => $this->lastGenerated()];
     }
 
     /**
@@ -29,7 +33,9 @@ class ForecastController extends Controller
      */
     public function generate(Request $request)
     {
-        $data = $this->forecast->analyze(...$this->options($request));
+        $options = $this->options($request);
+        abort_if($request->boolean('demo'), 422, 'Sample forecasts are preview only and cannot be saved.');
+        $data = $this->forecast->analyze(...$options);
         $this->forecast->save($data['results'], $data['forecast_keys']);
         ForecastRun::create([
             'generated_by' => $request->user()->user_id,
@@ -75,6 +81,7 @@ class ForecastController extends Controller
     private function options(Request $request): array
     {
         $data = $request->validate([
+            'demo' => ['nullable', 'boolean'],
             'months' => ['nullable', 'integer', Rule::in(ForecastService::HISTORY_OPTIONS)],
             'horizon' => ['nullable', 'integer', Rule::in(ForecastService::HORIZON_OPTIONS)],
             'method' => ['nullable', 'string', Rule::in(ForecastService::METHODS)],
