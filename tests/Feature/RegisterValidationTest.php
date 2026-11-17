@@ -64,6 +64,25 @@ class RegisterValidationTest extends TestCase
         $this->assertDatabaseCount('users', 0);
     }
 
+    public function test_a_single_name_initial_or_suffix_cannot_replace_a_full_name(): void
+    {
+        foreach (['Ana', 'Santos', 'Ña', 'A. Cruz', 'Ana C.', 'Ana Jr.', 'Ana II', 'Ana Sr. Jr.', 'Ana . Cruz', 'Ana - Cruz'] as $name) {
+            $this->postJson('/api/register', $this->payload(['name' => $name]))
+                ->assertUnprocessable()->assertJsonValidationErrors('name');
+        }
+        $this->assertDatabaseCount('users', 0);
+        $this->assertDatabaseCount('residents', 0);
+    }
+
+    public function test_complete_names_allow_middle_names_compound_surnames_and_suffixes(): void
+    {
+        foreach (["Ma. O'Neil-Cruz", 'Juan Dela Peña', 'Ana M. Cruz', 'Ana Maria Cruz', 'Ana Cruz', 'Ana Cruz Jr.', 'Ana Cruz III', 'Ña Peña', 'Ai Ng'] as $index => $name) {
+            $this->postJson('/api/register', $this->payload(['name' => $name, 'contact_no' => '0917000000' . $index]))
+                ->assertCreated()->assertJsonPath('user.name', $name);
+            $this->assertDatabaseHas('residents', ['name' => $name]);
+        }
+    }
+
     public function test_normalized_values_are_saved_and_formatted_duplicate_numbers_are_blocked(): void
     {
         $this->postJson('/api/register', $this->payload(['name' => "  Ana   Dela Peña  ", 'email' => ' ANA.CRZ@GMAIL.COM ',

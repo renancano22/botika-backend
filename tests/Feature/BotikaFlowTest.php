@@ -159,8 +159,8 @@ class BotikaFlowTest extends TestCase
             'name' => $name, 'password' => 'secret123', 'password_confirmation' => 'secret123',
             'barangay' => 'Zone I Poblacion', 'contact_no' => $phone,
         ])->assertCreated();
-        $a = $register('Resident A', '09170000001');
-        $b = $register('Resident B', '09170000002');
+        $a = $register('Ana Santos', '09170000001');
+        $b = $register('Ben Cruz', '09170000002');
 
         $requestA = $this->postJson('/api/requests', ['request_type' => 'medicine', 'items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => 8]]],
             ['Authorization' => 'Bearer ' . $a->json('token')])->assertCreated()->json('request_id');
@@ -371,8 +371,8 @@ class BotikaFlowTest extends TestCase
             'name' => $name, 'password' => 'secret123', 'password_confirmation' => 'secret123',
             'barangay' => 'Gate', 'contact_no' => $phone,
         ])->assertCreated();
-        $a = $register('Resident A', '09220000001');
-        $b = $register('Resident B', '09220000002');
+        $a = $register('Ana Santos', '09220000001');
+        $b = $register('Ben Cruz', '09220000002');
         $headersA = ['Authorization' => 'Bearer ' . $a->json('token')];
         $headersB = ['Authorization' => 'Bearer ' . $b->json('token')];
         $item = fn (int $qty) => ['items' => [['medicine_id' => $medicine->medicine_id, 'quantity' => $qty]]];
@@ -403,7 +403,7 @@ class BotikaFlowTest extends TestCase
         $this->postJson("/api/requests/{$requestA}/cancel", [], $headersB)->assertForbidden();
         $this->postJson("/api/requests/{$requestA}/cancel", [], $headersA)->assertOk()
             ->assertJsonPath('status', 'cancelled')
-            ->assertJsonPath('canceller.name', 'Resident A');
+            ->assertJsonPath('canceller.name', 'Ana Santos');
         $this->postJson("/api/requests/{$requestA}/cancel", [], $headersA)->assertStatus(422);
 
         // The 10 set aside go back to the stock, so B's restock request is now fulfilled.
@@ -430,7 +430,7 @@ class BotikaFlowTest extends TestCase
 
         $this->travel(2)->days();
         // Logins expire after 12 hours, so resident B logs in again.
-        $headersB = $this->token(User::where('name', 'Resident B')->first());
+        $headersB = $this->token(User::where('name', 'Ben Cruz')->first());
         $list = $this->getJson('/api/requests', $headersB)->assertOk()->json();
         $expired = collect($list)->firstWhere('request_id', $requestB);
         $this->assertSame('expired', $expired['status']);
@@ -440,7 +440,7 @@ class BotikaFlowTest extends TestCase
 
         // One request can be opened on its own page, but only by its owner (or staff).
         $this->getJson("/api/requests/{$requestB}", $headersB)->assertOk()->assertJsonPath('status', 'expired');
-        $this->getJson("/api/requests/{$requestB}", $this->token(User::where('name', 'Resident A')->first()))->assertNotFound();
+        $this->getJson("/api/requests/{$requestB}", $this->token(User::where('name', 'Ana Santos')->first()))->assertNotFound();
         $this->getJson("/api/requests/{$requestB}", $this->token($staff))->assertOk();
         $this->getJson('/api/medicines', $this->token($staff))->assertJsonPath('0.free_stock', 10);
     }

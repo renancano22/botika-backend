@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Resident;
 use App\Models\User;
+use App\Rules\FullResidentName;
 use App\Support\LoginAttempts;
 use App\Support\Rules;
 use Illuminate\Http\Request;
@@ -50,9 +51,7 @@ class AuthController extends Controller
         ]);
 
         $data = $request->validate([
-            'name' => ['bail', ...Rules::name(), function (string $attribute, mixed $value, \Closure $fail) {
-                if (preg_match_all('/\pL/u', $value) < 2) $fail('Enter a name with at least two letters.');
-            }],
+            'name' => ['bail', ...Rules::name(), new FullResidentName()],
             'email' => [...Rules::gmail(false), 'unique:users,email'],
             'password' => [...Rules::password(true, [$request->input('name'), $request->input('email'), $request->input('contact_no')]), 'confirmed'],
             'barangay' => Rules::barangay(),
