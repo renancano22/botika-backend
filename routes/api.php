@@ -28,6 +28,7 @@ Route::post('/register', [AuthController::class, 'register'])->middleware('throt
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
 Route::post('/forgot-password', [PasswordResetController::class, 'sendCode'])->middleware('throttle:5,1');
 Route::post('/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
+Route::post('/reset-password/check', [PasswordResetController::class, 'check'])->middleware('throttle:20,1,password-check');
 Route::get('/barangays', fn () => config('botika.barangays'));
 
 Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimedRequests::class])->group(function () use ($medicineList) {

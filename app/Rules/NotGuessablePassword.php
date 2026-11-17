@@ -35,6 +35,11 @@ class NotGuessablePassword implements ValidationRule
         if (! is_string($value) || $value === '') return;
         $password = mb_strtolower($value);
 
+        if (preg_match('/(?:0?9\d{9}|\+?639\d{9})/', preg_replace('/[\s()\-]/', '', $password))) {
+            $fail('Your password must not contain a mobile number. Please choose a different one.');
+            return;
+        }
+
         if (in_array($password, self::COMMON, true)) {
             $fail('This password is too common and easy to guess. Please choose a different one.');
             return;

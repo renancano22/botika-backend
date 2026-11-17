@@ -61,16 +61,49 @@ class PasswordResetController extends Controller
 
     public function reset(Request $request)
     {
-        $account = User::findByLogin((string) $request->input('login'));
+        [$user, $data, $verifiedCode] = $this->candidate($request);
+        DB::transaction(function () use ($user, $data, $verifiedCode) {
+            $row = DB::table('password_reset_codes')->where('user_id', $user->user_id)->lockForUpdate()->first();
+            if (! $row || $row->id !== $verifiedCode->id || Carbon::parse($row->expires_at)->isPast()
+                || $row->attempts >= self::MAX_ATTEMPTS || ! Hash::check($data['code'], $row->code_hash)) {
+                throw $this->invalidCode();
+            }
+            $user->setOwnPassword($data['password']);
+            $user->save();
+            DB::table('password_reset_codes')->where('id', $row->id)->delete();
+            $user->tokens()->delete();
+        });
+        LoginAttempts::clear($request, $data['login'], $user);
+        return response()->json(['message' => 'Your password has been changed. You can now log in.']);
+    }
+
+    /** Verify all requirements before enabling Save; no password, code or session is changed. */
+    public function check(Request $request)
+    {
+        [, , $row] = $this->candidate($request);
+        return response()->json([
+            'valid' => true,
+            'code_expires_at' => Carbon::parse($row->expires_at)->toIso8601String(),
+        ])->header('Cache-Control', 'no-store');
+    }
+
+    private function invalidCode(): ValidationException
+    {
+        return ValidationException::withMessages(['code' => 'This code is invalid or has expired. Please request a new one.']);
+    }
+
+    private function candidate(Request $request): array
+    {
         $data = $request->validate([
             'login' => 'required|string|max:255',
             'code' => 'required|digits:6',
-            'password' => [...Rules::password(true, [$account?->name, $account?->email, $account?->resident?->contact_no]), 'confirmed'],
+            'password' => 'required|string|max:100',
+            'password_confirmation' => 'required|string|max:100',
         ], [
             'code.digits' => 'The code has 6 digits.',
         ]);
 
-        $invalid = ValidationException::withMessages(['code' => 'This code is invalid or has expired. Please request a new one.']);
+        $invalid = $this->invalidCode();
 
         $user = User::findByLogin($data['login']);
         $row = $user ? DB::table('password_reset_codes')->where('user_id', $user->user_id)->first() : null;
@@ -89,13 +122,11 @@ class PasswordResetController extends Controller
             ]);
         }
 
-        $user->setOwnPassword($data['password']); // they chose this password themselves
-        $user->save();
-        DB::table('password_reset_codes')->where('user_id', $user->user_id)->delete();
-        $user->tokens()->delete(); // log out every device that used the old password
-        LoginAttempts::clear($request, $data['login'], $user); // a log-in blocked after wrong guesses can use the new password
-
-        return response()->json(['message' => 'Your password has been changed. You can now log in.']);
+        // Check account-specific requirements only after the code proves ownership. Never expose account details.
+        $request->validate([
+            'password' => [...Rules::password(true, [$user->name, $user->email, $user->resident?->contact_no]), 'confirmed'],
+        ]);
+        return [$user, $data, $row];
     }
 
     /** Residents get the code by SMS (unless they typed their email); staff and admin get it by email. */
