@@ -452,7 +452,7 @@ class ForecastService
     /** Medicines asked for most often in medicine requests (pending and approved) since $since (top 5). */
     public function topRequestedMedicines(Carbon $since, int $limit = 5): array
     {
-        return RequestItem::query()
+        return RequestItem::query()->eligible()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->join('medicines', 'medicines.medicine_id', '=', 'request_items.medicine_id')
             ->where('requests.request_type', 'medicine')
@@ -521,7 +521,7 @@ class ForecastService
             ->get();
 
         // Demand in request records that is not in the dispensing records yet (as of now), per medicine.
-        $open = fn (string $type, array $statuses) => RequestItem::query()
+        $open = fn (string $type, array $statuses) => RequestItem::query()->eligible()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->where('requests.request_type', $type)
             ->whereIn('requests.status', $statuses)
@@ -533,7 +533,7 @@ class ForecastService
         $pending = $sample !== null ? [] : $open('medicine', ['pending']);
         $reserved = $sample !== null ? [] : $open('medicine', ['approved']); // set aside for residents, to be dispensed from the current stock
         // Restock requests have no quantity: the number of waiting restock requests per medicine.
-        $restockWaiting = $sample !== null ? [] : RequestItem::query()
+        $restockWaiting = $sample !== null ? [] : RequestItem::query()->eligible()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->where('requests.request_type', 'restock')
             ->whereIn('requests.status', ['pending', 'approved'])

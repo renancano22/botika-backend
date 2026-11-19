@@ -219,6 +219,14 @@ class RequestController extends Controller
         return $medicineRequest->fresh(self::DETAILS);
     }
 
+    /** Review every medicine together, keeping approved and rejected lines in the same request. */
+    public function review(Request $request, MedicineRequest $medicineRequest)
+    {
+        abort_unless($medicineRequest->request_type === 'medicine', 422, 'Use the restock approval workflow for restock requests.');
+        $request->validate(['item_reviews' => 'required|array|list|min:1|max:5']);
+        return $this->approve($request, $medicineRequest);
+    }
+
     public function approve(Request $request, MedicineRequest $medicineRequest)
     {
         [$medicineRequest, $message] = DB::transaction(function () use ($request, $medicineRequest) {
@@ -226,52 +234,93 @@ class RequestController extends Controller
             $this->authorizeReviewer($request, $medicineRequest);
             $medicineRequest->load(['items.medicine', 'resident', 'prescription', 'prescriptions']);
 
+            $perMedicine = $request->has('item_reviews');
+            $rejected = collect();
+            if ($perMedicine) {
+                abort_unless($medicineRequest->request_type === 'medicine', 422, 'Individual review is for medicine requests only.');
+                $data = $request->validate([
+                    'item_reviews' => 'required|array|list|min:1|max:5',
+                    'item_reviews.*.request_item_id' => 'required|integer|distinct',
+                    'item_reviews.*.decision' => ['required', Rule::in(['approved', 'rejected'])],
+                    'item_reviews.*.reason' => 'nullable|string|max:255',
+                ]);
+                $decisions = collect($data['item_reviews'])->keyBy('request_item_id');
+                $expected = $medicineRequest->items->pluck('request_item_id')->all();
+                $given = $decisions->keys()->all();
+                if (array_diff($expected, $given) || array_diff($given, $expected)) {
+                    throw ValidationException::withMessages(['item_reviews' => 'Review every medicine in this request exactly once. Reload if the request changed.']);
+                }
+                foreach ($medicineRequest->items as $item) {
+                    $decision = $decisions[$item->request_item_id];
+                    $reason = trim($decision['reason'] ?? '');
+                    if ($decision['decision'] === 'rejected' && (mb_strlen($reason) < 3 || ! preg_match('/\pL/u', $reason))) {
+                        throw ValidationException::withMessages(['item_reviews' => 'Give a reason of at least 3 characters for each rejected medicine.']);
+                    }
+                    $item->update(['review_status' => $decision['decision'], 'rejection_reason' => $decision['decision'] === 'rejected' ? $reason : null]);
+                }
+                $rejected = $medicineRequest->items->where('review_status', 'rejected');
+            }
+
             // Prescription medicines: the staff must check the uploaded prescription before approving.
             $rxNames = $medicineRequest->request_type === 'medicine' ? $medicineRequest->prescriptionMedicines() : collect();
             if ($rxNames->isNotEmpty()) {
-                if ($medicineRequest->prescriptions->isEmpty() || $medicineRequest->missingPrescriptionMedicineIds()) {
+                if ($medicineRequest->prescriptions->isEmpty() || (! $perMedicine && $medicineRequest->missingPrescriptionMedicineIds())) {
                     throw ValidationException::withMessages(['prescription' => 'No prescription was uploaded for ' . $rxNames->implode(', ') . '. Reject the request or ask the resident to upload one.']);
                 }
                 if (! $request->boolean('prescription_verified')) {
                     throw ValidationException::withMessages(['prescription_verified' => 'Please check the prescription and confirm it is valid before approving.']);
                 }
-                if ($medicineRequest->prescriptions->count() > 1 || $request->has('verified_prescription_ids')) {
+                if ($perMedicine || $medicineRequest->prescriptions->count() > 1 || $request->has('verified_prescription_ids')) {
                     $checked = $request->validate(['verified_prescription_ids' => 'required|array|list|max:5', 'verified_prescription_ids.*' => 'required|integer|distinct']);
                     $ids = array_map('intval', $checked['verified_prescription_ids']);
                     $expected = $medicineRequest->prescriptions->pluck('prescription_id')->map(fn ($id) => (int) $id)->all();
-                    if (array_diff($expected, $ids) || array_diff($ids, $expected)) {
+                    if (array_diff($ids, $expected) || (! $perMedicine && array_diff($expected, $ids))) {
                         throw ValidationException::withMessages(['verified_prescription_ids' => 'Check every uploaded prescription before approving this request.']);
+                    }
+                    if ($perMedicine) {
+                        $covered = $medicineRequest->prescriptions->whereIn('prescription_id', $ids)->flatMap(fn ($file) => $file->medicine_ids ?? [])->map(fn ($id) => (int) $id)->all();
+                        $uncovered = $medicineRequest->eligibleItems()->filter(fn ($item) => $item->medicine?->requires_prescription && ! in_array((int) $item->medicine_id, $covered, true));
+                        if ($uncovered->isNotEmpty()) {
+                            throw ValidationException::withMessages(['verified_prescription_ids' => 'Check a valid prescription covering each approved medicine: ' . $uncovered->map(fn ($item) => $item->medicine->medicine_name)->implode(', ') . '.']);
+                        }
                     }
                 }
             }
 
+            $allRejected = $perMedicine && $medicineRequest->eligibleItems()->isEmpty();
+            $rejectionSummary = $rejected->map(fn ($item) => $item->medicine->medicine_name . ': ' . $item->rejection_reason)->implode('; ');
             if ($medicineRequest->request_type === 'medicine') {
-                $this->checkAvailability('medicine', $medicineRequest->items->map->only(['medicine_id', 'quantity'])->all());
+                $this->checkAvailability('medicine', $medicineRequest->eligibleItems()->map->only(['medicine_id', 'quantity'])->all());
                 // Pickup date = the approval date; the resident has botika.unclaimed_days (7) days to claim it.
                 $pickup = MedicineRequest::noticeDate(now());
                 $deadline = MedicineRequest::noticeDate(MedicineRequest::claimDeadline(now()));
                 $days = config('botika.unclaimed_days');
-                $message = "BulanBotikaCare: Request No. {$medicineRequest->request_id} is APPROVED and ready for pickup at Botika ng Bayan Bulan "
+                $medicineRequest->status = $allRejected ? 'rejected' : 'approved';
+                $message = "BulanBotikaCare: Request No. {$medicineRequest->request_id} " . ($rejected->isNotEmpty() ? 'is PARTIALLY APPROVED' : 'is APPROVED') . " and ready for pickup at Botika ng Bayan Bulan "
                     . "({$medicineRequest->itemsSummary()}). Pickup date: {$pickup}. Claim it on or before {$deadline} ({$days} days). "
                     . "Bring your Resident ID/QR {$medicineRequest->resident->qr_code} and a valid ID or Barangay ID. "
                     . ($rxNames->isNotEmpty() ? 'Bring all original prescriptions when claiming your medicines. ' : '')
-                    . 'After the deadline, the medicine will no longer be given.';
+                    . 'After the deadline, the medicine will no longer be given.'
+                    . ($rejected->isNotEmpty() ? ' Not approved: ' . $rejectionSummary . '. You may submit a new request for these medicines with valid prescriptions if needed.' : '');
+                if ($allRejected) {
+                    $message = "BulanBotikaCare: Request No. {$medicineRequest->request_id} was NOT APPROVED. " . $rejectionSummary . '. You may submit a new request if you still need the medicines.';
+                }
             } else {
                 $message = "BulanBotikaCare: Your restock request No. {$medicineRequest->request_id} ({$medicineRequest->itemsSummary()}) is APPROVED. "
                     . 'We will notify you once the medicine is available at Botika ng Bayan Bulan. No action is needed for now.';
             }
 
             $medicineRequest->update([
-                'status' => 'approved',
+                'status' => $allRejected ? 'rejected' : 'approved',
                 'reviewed_by' => $request->user()->user_id,
                 'reviewed_at' => now(),
-                'remarks' => $request->input('remarks'),
+                'remarks' => $rejected->isNotEmpty() ? mb_substr('Not approved: ' . $rejectionSummary, 0, 255) : $request->input('remarks'),
                 'prescription_verified_at' => $rxNames->isNotEmpty() ? now() : null,
                 'prescription_verified_by' => $rxNames->isNotEmpty() ? $request->user()->user_id : null,
             ]);
             return [$medicineRequest, $message];
         });
-        $this->sms->notify($medicineRequest->resident, $message, $medicineRequest->request_id, 'approved');
+        $this->sms->notify($medicineRequest->resident, $message, $medicineRequest->request_id, $medicineRequest->status === 'rejected' ? 'rejected' : 'approved');
 
         // If the medicine was restocked while the request was waiting, mark it fulfilled right away.
         if ($medicineRequest->request_type === 'restock') {
@@ -291,12 +340,20 @@ class RequestController extends Controller
             'remarks.min' => 'Please describe the reason (at least 3 characters).',
         ]);
 
-        $medicineRequest->update([
-            'status' => 'rejected',
-            'reviewed_by' => $request->user()->user_id,
-            'reviewed_at' => now(),
-            'remarks' => $data['remarks'],
-        ]);
+        $medicineRequest = DB::transaction(function () use ($request, $medicineRequest, $data) {
+            $locked = MedicineRequest::whereKey($medicineRequest->request_id)->lockForUpdate()->firstOrFail();
+            $this->authorizeReviewer($request, $locked);
+            $locked->update([
+                'status' => 'rejected',
+                'reviewed_by' => $request->user()->user_id,
+                'reviewed_at' => now(),
+                'remarks' => $data['remarks'],
+            ]);
+            if ($locked->request_type === 'medicine') {
+                $locked->items()->update(['review_status' => 'rejected', 'rejection_reason' => $data['remarks']]);
+            }
+            return $locked;
+        });
 
         $type = $medicineRequest->request_type === 'restock' ? 'restock' : 'medicine';
         $this->sms->notify(
@@ -359,7 +416,7 @@ class RequestController extends Controller
             ->where('resident_id', $residentId)
             ->where('request_type', 'medicine')
             ->whereIn('status', ['pending', 'approved'])
-            ->whereHas('items', fn ($q) => $q->whereIn('medicine_id', $medicineIds))
+            ->whereHas('items', fn ($q) => $q->eligible()->whereIn('medicine_id', $medicineIds))
             ->orderBy('request_date')
             ->first();
         if (! $open) {

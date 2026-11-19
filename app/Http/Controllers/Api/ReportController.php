@@ -159,7 +159,7 @@ class ReportController extends Controller
 
     private function mostRequested(string $from, string $to): array
     {
-        return RequestItem::query()
+        return RequestItem::query()->eligible()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->join('medicines', 'medicines.medicine_id', '=', 'request_items.medicine_id')
             ->whereDate('requests.request_date', '>=', $from)
@@ -199,7 +199,7 @@ class ReportController extends Controller
 
     private function shortages(string $from, string $to): array
     {
-        $restockDemand = RequestItem::query()
+        $restockDemand = RequestItem::query()->eligible()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->where('requests.request_type', 'restock')
             ->whereDate('requests.request_date', '>=', $from)

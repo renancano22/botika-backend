@@ -222,11 +222,11 @@ class DispensingController extends Controller
                 'prescription_checked' => $prescriptionChecked,
             ]);
 
-            foreach ($req->items as $item) {
+            foreach ($req->eligibleItems() as $item) {
                 $this->inventory->deduct($item->medicine_id, $item->quantity, $staff->user_id, $dispensing->dispensing_id);
             }
 
-            $dispensing->items()->createMany($req->items->map->only(['medicine_id', 'quantity', 'source'])->all()); // Request / Walk-in kept per medicine
+            $dispensing->items()->createMany($req->eligibleItems()->map->only(['medicine_id', 'quantity', 'source'])->all()); // Rejected lines are never released.
             $req->update(['status' => 'dispensed']);
 
             return $dispensing;

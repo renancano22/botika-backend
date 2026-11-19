@@ -38,7 +38,7 @@ class InventoryService
      */
     public function reservedStock(int $medicineId): int
     {
-        return (int) RequestItem::query()
+        return (int) RequestItem::query()->eligible()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->where('requests.request_type', 'medicine')
             ->where('requests.status', 'approved')
@@ -49,7 +49,7 @@ class InventoryService
     /** Reserved quantity for every medicine at once: [medicine_id => quantity]. */
     public function reservedByMedicine(): array
     {
-        return RequestItem::query()
+        return RequestItem::query()->eligible()
             ->join('requests', 'requests.request_id', '=', 'request_items.request_id')
             ->where('requests.request_type', 'medicine')
             ->where('requests.status', 'approved')
@@ -169,7 +169,7 @@ class InventoryService
         $deadline = fn (MedicineRequest $r) => MedicineRequest::claimDeadline($r->reviewed_at)->toDateString();
         $reserved = [];
         foreach ($requests as $r) {
-            foreach ($r->items as $item) {
+            foreach ($r->eligibleItems() as $item) {
                 $reserved[$item->medicine_id][] = [$deadline($r), (int) $item->quantity];
             }
         }
@@ -177,7 +177,7 @@ class InventoryService
         $risks = collect();
         foreach ($requests as $r) {
             $due = $deadline($r);
-            foreach ($r->items as $item) {
+            foreach ($r->eligibleItems() as $item) {
                 $stock = $batches->get($item->medicine_id, collect());
                 $validNow = (int) $stock->sum('quantity');
                 $setAside = array_sum(array_column($reserved[$item->medicine_id], 1));

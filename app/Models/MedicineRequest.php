@@ -63,7 +63,13 @@ class MedicineRequest extends Model
     public function prescriptionMedicines(): \Illuminate\Support\Collection
     {
         $this->loadMissing('items.medicine');
-        return $this->items->filter(fn ($i) => $i->medicine?->requires_prescription)->map(fn ($i) => $i->medicine->medicine_name)->values();
+        return $this->eligibleItems()->filter(fn ($i) => $i->medicine?->requires_prescription)->map(fn ($i) => $i->medicine->medicine_name)->values();
+    }
+
+    public function eligibleItems(): \Illuminate\Support\Collection
+    {
+        $this->loadMissing('items.medicine');
+        return $this->items->where('review_status', '!=', 'rejected')->values();
     }
 
     public function canceller(): BelongsTo
@@ -115,7 +121,8 @@ class MedicineRequest extends Model
     {
         $this->loadMissing('items.medicine');
         // Restock requests have no quantity: only the medicine names.
-        $parts = $this->items->map(fn ($i) => trim(($i->medicine?->medicine_name ?? 'Medicine') . ($i->quantity === null ? '' : ' x' . $i->quantity)));
+        $items = in_array($this->status, ['approved', 'dispensed', 'cancelled', 'expired'], true) ? $this->eligibleItems() : $this->items;
+        $parts = $items->map(fn ($i) => trim(($i->medicine?->medicine_name ?? 'Medicine') . ($i->quantity === null ? '' : ' x' . $i->quantity)));
         $text = $parts->take($max)->implode(', ');
         $more = $parts->count() - $max;
         return $more > 0 ? "{$text} and {$more} more" : $text;

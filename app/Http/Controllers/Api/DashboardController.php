@@ -163,7 +163,7 @@ class DashboardController extends Controller
                 'by_status' => collect(['pending', 'approved', 'dispensed', 'rejected', 'cancelled', 'expired'])
                     ->mapWithKeys(fn ($s) => [$s => $byStatus[$s] ?? 0])->all(),
                 'demand' => $byStatus->only(MedicineRequest::DEMAND_STATUSES)->sum(),
-                'quantity_requested' => (int) $within(RequestItem::query()->join('requests', 'requests.request_id', '=', 'request_items.request_id'), 'requests.request_date')
+                'quantity_requested' => (int) $within(RequestItem::query()->eligible()->join('requests', 'requests.request_id', '=', 'request_items.request_id'), 'requests.request_date')
                     ->where('requests.request_type', 'medicine')->whereIn('requests.status', MedicineRequest::DEMAND_STATUSES)
                     ->sum('request_items.quantity'),
                 'restock' => ['total' => $restock->except('cancelled')->sum(), 'pending' => $restock['pending'] ?? 0],
@@ -196,12 +196,12 @@ class DashboardController extends Controller
      */
     private function topMedicines(array $sections, callable $within): array
     {
-        $requested = $sections['requests'] ? $within(RequestItem::query()->join('requests', 'requests.request_id', '=', 'request_items.request_id'), 'requests.request_date')
+        $requested = $sections['requests'] ? $within(RequestItem::query()->eligible()->join('requests', 'requests.request_id', '=', 'request_items.request_id'), 'requests.request_date')
             ->where('requests.request_type', 'medicine')->whereIn('requests.status', MedicineRequest::DEMAND_STATUSES)
             ->groupBy('request_items.medicine_id')
             ->selectRaw('request_items.medicine_id, COUNT(DISTINCT requests.request_id) as requests, SUM(request_items.quantity) as quantity')
             ->get()->keyBy('medicine_id') : collect();
-        $restock = $sections['requests'] ? $within(RequestItem::query()->join('requests', 'requests.request_id', '=', 'request_items.request_id'), 'requests.request_date')
+        $restock = $sections['requests'] ? $within(RequestItem::query()->eligible()->join('requests', 'requests.request_id', '=', 'request_items.request_id'), 'requests.request_date')
             ->where('requests.request_type', 'restock')->where('requests.status', '!=', 'cancelled')
             ->groupBy('request_items.medicine_id')
             ->selectRaw('request_items.medicine_id, COUNT(DISTINCT requests.request_id) as total')

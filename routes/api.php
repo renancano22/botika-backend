@@ -112,6 +112,7 @@ Route::middleware(['auth:sanctum', EnsurePasswordChanged::class, ExpireUnclaimed
         Route::get('/requests/counts', [RequestController::class, 'counts'])->middleware('permission:requests.view');
         Route::middleware('permission:requests.review')->group(function () {
             Route::post('/requests/{medicineRequest}/approve', [RequestController::class, 'approve']);
+            Route::post('/requests/{medicineRequest}/review', [RequestController::class, 'review']);
             Route::post('/requests/{medicineRequest}/reject', [RequestController::class, 'reject']);
         });
 
