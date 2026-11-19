@@ -7,6 +7,7 @@ use App\Mail\TemporaryPasswordMail;
 use App\Models\Resident;
 use App\Models\User;
 use App\Services\SmsService;
+use App\Services\ResidentCorrectionService;
 use App\Support\Rules;
 use App\Support\Listing;
 use App\Support\TemporaryPassword;
@@ -134,15 +135,14 @@ class UserController extends Controller
             return response()->json(['message' => 'You cannot change the role of your own account.'], 422);
         }
 
-        // Correcting a resident's name or barangay: not into another resident's name in that barangay (no duplicates).
+        if ($user->role === User::ROLE_RESIDENT) {
+            abort_unless($user->resident, 422, 'This account has no resident record.');
+            app(ResidentCorrectionService::class)->correct($request, $user->resident, $data, true);
+            return $user->fresh()->load('resident');
+        }
+
+        // Staff and administrator account edits retain their existing workflow.
         return DB::transaction(function () use ($user, $data) {
-            $resident = $user->resident;
-            if ($resident) {
-                $barangay = ($data['barangay'] ?? null) ?: (string) Resident::splitAddress($resident->address)['barangay'];
-                if ($error = $resident->correctIdentity($data['name'], $barangay)) {
-                    return response()->json(['message' => $error, 'errors' => ['name' => [$error]]], 422);
-                }
-            }
             $user->fill(['name' => $data['name'], 'email' => $data['email'] ?? null, 'role' => $data['role']]);
             $user->save();
 

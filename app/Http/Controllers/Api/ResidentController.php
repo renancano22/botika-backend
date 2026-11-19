@@ -86,11 +86,15 @@ class ResidentController extends Controller
         $request->merge(['name' => preg_replace('/\s+/u', ' ', trim((string) $request->input('name')))]);
         $data = $request->validate(['name' => Rules::name(), 'barangay' => Rules::barangay()], Rules::messages());
 
-        $error = DB::transaction(fn () => $resident->correctIdentity($data['name'], $data['barangay']));
-        if ($error) {
-            return response()->json(['message' => $error, 'errors' => ['name' => [$error]]], 422);
-        }
-        return $resident->fresh();
+        return app(\App\Services\ResidentCorrectionService::class)->correct($request, $resident, $data);
+    }
+
+    /** Admin-only, read-only correction history; never included in public resident searches. */
+    public function corrections(Request $request, Resident $resident)
+    {
+        $request->validate(['page' => ['sometimes', 'integer', 'min:1']]);
+        return response()->json(\App\Models\ResidentCorrection::where('resident_id', $resident->resident_id)
+            ->orderByDesc('correction_id')->paginate(10))->header('Cache-Control', 'no-store, private');
     }
 
     /**

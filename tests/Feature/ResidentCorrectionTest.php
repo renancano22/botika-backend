@@ -50,15 +50,15 @@ class ResidentCorrectionTest extends TestCase
         Resident::create(['name' => 'Gino Reyes', 'address' => 'Zone I Poblacion, Bulan, Sorsogon', 'qr_code' => 'BBC-000021']);
 
         // Counter record: wrong barangay corrected (house no. kept); not into an existing name in that barangay.
-        $this->putJson("/api/residents/{$counter->resident_id}", ['name' => 'Gino Reyes', 'barangay' => 'Zone I Poblacion'], $admin)->assertStatus(422)
+        $this->putJson("/api/residents/{$counter->resident_id}", ['name' => 'Gino Reyes', 'barangay' => 'Zone I Poblacion', 'identity_verified' => true, 'verification_method' => 'valid_id', 'correction_reason' => 'Corrected the barangay after checking the resident ID.'], $admin)->assertStatus(422)
             ->assertJsonPath('errors.name.0', Resident::NAME_TAKEN);
-        $this->putJson("/api/residents/{$counter->resident_id}", ['name' => 'Gino S. Reyes', 'barangay' => 'Zone I Poblacion'], $admin)->assertOk()
+        $this->putJson("/api/residents/{$counter->resident_id}", ['name' => 'Gino S. Reyes', 'barangay' => 'Zone I Poblacion', 'identity_verified' => true, 'verification_method' => 'valid_id', 'correction_reason' => 'Corrected name and barangay after checking the resident ID.'], $admin)->assertOk()
             ->assertJsonPath('address', 'Purok 2, Zone I Poblacion, Bulan, Sorsogon')->assertJsonPath('qr_code', 'BBC-000020');
 
         // Resident account: User Accounts → Edit corrects the barangay too (name kept in sync on the account).
         $userId = $this->postJson('/api/register', ['name' => 'Ana Cruz', 'password' => 'Kalinga4821', 'password_confirmation' => 'Kalinga4821',
             'barangay' => 'Gate', 'contact_no' => '09171234567'])->assertCreated()->json('user.user_id');
-        $this->putJson("/api/users/{$userId}", ['name' => 'Ana M. Cruz', 'email' => '', 'role' => 'resident', 'barangay' => 'San Isidro'], $admin)->assertOk()
+        $this->putJson("/api/users/{$userId}", ['name' => 'Ana M. Cruz', 'email' => '', 'role' => 'resident', 'barangay' => 'San Isidro', 'identity_verified' => true, 'verification_method' => 'valid_id', 'correction_reason' => 'Corrected name and barangay after checking the resident ID.'], $admin)->assertOk()
             ->assertJsonPath('name', 'Ana M. Cruz')->assertJsonPath('resident.address', 'San Isidro, Bulan, Sorsogon')->assertJsonPath('resident.name', 'Ana M. Cruz');
     }
 }

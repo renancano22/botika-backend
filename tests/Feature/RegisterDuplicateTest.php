@@ -70,8 +70,9 @@ class RegisterDuplicateTest extends TestCase
         // The administrator can correct a name, but not into another resident's name in the same barangay.
         $admin = ['Authorization' => 'Bearer ' . User::factory()->admin()->create()->createToken('t')->plainTextToken];
         $anaUser = User::where('name', 'Ana Cruz')->firstOrFail();
-        $this->putJson("/api/users/{$anaUser->user_id}", ['name' => 'Carlo Dalisay', 'email' => '', 'role' => 'resident'], $admin)->assertStatus(422);
-        $this->putJson("/api/users/{$anaUser->user_id}", ['name' => 'Ana M. Cruz', 'email' => '', 'role' => 'resident'], $admin)->assertOk();
+        $verification = ['identity_verified' => true, 'verification_method' => 'valid_id', 'correction_reason' => 'Corrected the registered name after checking the resident ID.', 'barangay' => 'Zone I Poblacion'];
+        $this->putJson("/api/users/{$anaUser->user_id}", ['name' => 'Carlo Dalisay', 'email' => '', 'role' => 'resident'] + $verification, $admin)->assertStatus(422);
+        $this->putJson("/api/users/{$anaUser->user_id}", ['name' => 'Ana M. Cruz', 'email' => '', 'role' => 'resident'] + $verification, $admin)->assertOk();
         $this->assertSame('Ana M. Cruz', $anaUser->resident->fresh()->name);
     }
 }
