@@ -41,6 +41,13 @@ class Medicine extends Model
         });
     }
 
+    /** Default used by resident request forms; explicit quantities in existing clients stay supported. */
+    public function automaticRequestQuantity(): ?int
+    {
+        $form = $this->dosage_form ?: $this->medicine_name;
+        return preg_match('/\b(?:tablets?|capsules?)\b/i', $form . ' ' . $this->unit) ? 10 : null;
+    }
+
     private static function hasIdentityColumn(): bool
     {
         static $has = null;

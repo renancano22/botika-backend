@@ -28,7 +28,7 @@ class RequestController extends Controller
 {
     /** Everything the request status tracker shows (who reviewed, dispensed or cancelled it, and when). */
     public const DETAILS = [
-        'items.medicine:medicine_id,medicine_name,unit,requires_prescription', 'resident',
+        'items.medicine:medicine_id,medicine_name,unit,dosage_form,requires_prescription', 'resident',
         'prescription', 'prescriptions', 'prescriptionVerifier:user_id,name', 'reviewer:user_id,name', 'canceller:user_id,name',
         'dispensing:dispensing_id,request_id,dispensed_by,dispensed_at', 'dispensing.dispenser:user_id,name',
     ];
@@ -370,12 +370,30 @@ class RequestController extends Controller
     // ---------------------------------------------------------------- helpers
 
     /**
-     * Medicine requests: each medicine with a quantity of 1 to botika.max_request_quantity (10).
+     * Tablets/capsules default to 10 when quantity is omitted. Other forms require a quantity.
+     * Explicit quantities remain supported for compatibility with existing requests/clients.
      * Restock requests: only the medicines (no quantity); a quantity sent with them is not saved.
      */
     private function validateItems(Request $request, bool $withType): array
     {
         $restock = $withType && $request->input('request_type') === 'restock';
+        $items = $request->input('items');
+        if (! $restock && is_array($items) && array_is_list($items) && count($items) <= 5) {
+            $ids = collect($items)->filter(fn ($item) => is_array($item) && ! array_key_exists('quantity', $item)
+                && isset($item['medicine_id']) && (is_int($item['medicine_id'])
+                    || (is_string($item['medicine_id']) && ctype_digit($item['medicine_id'])))
+                && filter_var($item['medicine_id'], FILTER_VALIDATE_INT) !== false)
+                ->pluck('medicine_id')->all();
+            $medicines = $ids ? Medicine::whereIn('medicine_id', $ids)->get()->keyBy('medicine_id') : collect();
+            foreach ($items as $index => $item) {
+                if (! is_array($item) || array_key_exists('quantity', $item)) continue;
+                $id = $item['medicine_id'] ?? null;
+                if (! is_int($id) && ! (is_string($id) && ctype_digit($id))) continue;
+                $automatic = $medicines->get((int) $id)?->automaticRequestQuantity();
+                if ($automatic !== null) $items[$index]['quantity'] = $automatic;
+            }
+            $request->merge(['items' => $items]);
+        }
         $rules = [
             'items' => 'required|array|list|min:1|max:5',
             'items.*' => 'required|array',
@@ -390,6 +408,7 @@ class RequestController extends Controller
 
         $data = $request->validate($rules, [
             'items.*.quantity.max' => 'You can request at most :max per medicine.',
+            'items.*.quantity.required' => 'Choose a quantity for this medicine.',
             'items.*.quantity.min' => 'The quantity must be at least 1.',
             'items.*.quantity.integer' => 'The quantity must be a whole number.',
             'items.*.medicine_id.distinct' => 'This medicine is already in your request.',
@@ -466,7 +485,9 @@ class RequestController extends Controller
 
             if ($type === 'medicine' && $available < $item['quantity']) {
                 throw ValidationException::withMessages([
-                    "items.$i.quantity" => "Only {$available} available. You can submit a restock request instead.",
+                    "items.$i.quantity" => $available > 0
+                        ? "Only {$available} available, fewer than the requested {$item['quantity']}. Please check again after restocking."
+                        : 'No stock is available. You can submit a restock request instead.',
                 ]);
             }
             if ($type === 'restock' && $available > 0) {
